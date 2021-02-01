@@ -4218,6 +4218,7 @@ dependencies = [
  "task_executor",
  "tempfile",
  "tokio 0.3.6",
+ "tokio-util 0.5.1",
  "tree_hash",
  "types",
 ]

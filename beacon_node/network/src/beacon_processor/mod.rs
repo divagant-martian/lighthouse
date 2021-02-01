@@ -47,6 +47,7 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 use task_executor::TaskExecutor;
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::time::{delay_queue, DelayQueue};
 use types::{
     Attestation, AttesterSlashing, EthSpec, Hash256, ProposerSlashing, SignedAggregateAndProof,
     SignedBeaconBlock, SignedVoluntaryExit, SubnetId,
