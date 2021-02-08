@@ -70,6 +70,11 @@ pub const MAX_WORK_EVENT_QUEUE_LEN: usize = 16_384;
 /// set to the CPU count, but we set it high to be safe.
 const MAX_IDLE_QUEUE_LEN: usize = 16_384;
 
+/// The maximum size of the channel receiving work to be reprocessed by the `BeaconProcessor`.
+///
+/// Setting this too low will cause consensus messages to be dropped.
+pub const MAX_REPROCESS_WORK_EVENT_QUEUE_LEN: usize = 4_096;
+
 /// The maximum number of queued `Attestation` objects that will be stored before we start dropping
 /// them.
 const MAX_UNAGGREGATED_ATTESTATION_QUEUE_LEN: usize = 16_384;
@@ -116,6 +121,8 @@ const MAX_BLOCKS_BY_ROOTS_QUEUE_LEN: usize = 1_024;
 
 /// The name of the manager tokio task.
 const MANAGER_TASK_NAME: &str = "beacon_processor_manager";
+/// The name of the manager tokio task.
+const REPROCESS_TASK_NAME: &str = "beacon_processor_reprocess";
 /// The name of the worker tokio tasks.
 const WORKER_TASK_NAME: &str = "beacon_processor_worker";
 
@@ -515,6 +522,8 @@ impl<T: BeaconChainTypes> BeaconProcessor<T> {
     /// started with `spawn_blocking`.
     pub fn spawn_manager(mut self, mut event_rx: mpsc::Receiver<WorkEvent<T::EthSpec>>) {
         let (idle_tx, mut idle_rx) = mpsc::channel::<()>(MAX_IDLE_QUEUE_LEN);
+        let (reprocess_tx, mut reprocess_rx) =
+            mpsc::channel::<()>(MAX_REPROCESS_WORK_EVENT_QUEUE_LEN);
 
         // Using LIFO queues for attestations since validator profits rely upon getting fresh
         // attestations into blocks. Additionally, later attestations contain more information than
@@ -773,8 +782,13 @@ impl<T: BeaconChainTypes> BeaconProcessor<T> {
             }
         };
 
+        let reprocess_future = async move || loop {
+            tokio::select! {}
+        };
+
         // Spawn on the core executor.
         executor.spawn(manager_future, MANAGER_TASK_NAME);
+        executor.spawn(reprocess_future, REPROCESS_TASK_NAME);
     }
 
     /// Spawns a blocking worker thread to process some `Work`.
