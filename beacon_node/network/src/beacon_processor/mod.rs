@@ -782,8 +782,19 @@ impl<T: BeaconChainTypes> BeaconProcessor<T> {
             }
         };
 
+        enum ReprocessWork {
+            AggregateAtt,
+            UnaggregatedAtt,
+        }
+        // TODO size
+        let cached_atts: DelayQueue<ReprocessWork> = DelayQueue::with_capacity(MAX_WORK_EVENT_QUEUE_LEN);
         let reprocess_future = async move || loop {
-            tokio::select! {}
+            tokio::select! {
+                work =  cached_atts.next() {
+
+                }
+
+            }
         };
 
         // Spawn on the core executor.
