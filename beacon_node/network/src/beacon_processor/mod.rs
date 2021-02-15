@@ -47,7 +47,6 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 use task_executor::TaskExecutor;
 use tokio::sync::{mpsc, oneshot};
-use tokio_util::time::{delay_queue, DelayQueue};
 use types::{
     Attestation, AttesterSlashing, EthSpec, Hash256, ProposerSlashing, SignedAggregateAndProof,
     SignedBeaconBlock, SignedVoluntaryExit, SubnetId,
@@ -56,6 +55,7 @@ use types::{
 use worker::Worker;
 
 mod worker;
+mod reprocess;
 
 pub use worker::ProcessId;
 
@@ -782,24 +782,9 @@ impl<T: BeaconChainTypes> BeaconProcessor<T> {
             }
         };
 
-        enum ReprocessWork {
-            AggregateAtt,
-            UnaggregatedAtt,
-        }
-        // TODO size
-        let cached_atts: DelayQueue<ReprocessWork> = DelayQueue::with_capacity(MAX_WORK_EVENT_QUEUE_LEN);
-        let reprocess_future = async move || loop {
-            tokio::select! {
-                work =  cached_atts.next() {
-
-                }
-
-            }
-        };
-
         // Spawn on the core executor.
         executor.spawn(manager_future, MANAGER_TASK_NAME);
-        executor.spawn(reprocess_future, REPROCESS_TASK_NAME);
+        reprocess::spawn_reprocess_manager(executor);
     }
 
     /// Spawns a blocking worker thread to process some `Work`.
