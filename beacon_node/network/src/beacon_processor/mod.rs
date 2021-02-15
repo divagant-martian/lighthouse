@@ -522,7 +522,9 @@ impl<T: BeaconChainTypes> BeaconProcessor<T> {
     /// started with `spawn_blocking`.
     pub fn spawn_manager(mut self, mut event_rx: mpsc::Receiver<WorkEvent<T::EthSpec>>) {
         let (idle_tx, mut idle_rx) = mpsc::channel::<()>(MAX_IDLE_QUEUE_LEN);
-        let (reprocess_tx, mut reprocess_rx) =
+        let (reprocess_works_tx, mut reprocess_works_rx) =
+            mpsc::channel::<()>(MAX_REPROCESS_WORK_EVENT_QUEUE_LEN);
+        let (reprocess_events_tx, mut reprocess_events_rx) =
             mpsc::channel::<()>(MAX_REPROCESS_WORK_EVENT_QUEUE_LEN);
 
         // Using LIFO queues for attestations since validator profits rely upon getting fresh

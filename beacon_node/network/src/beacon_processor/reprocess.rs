@@ -29,6 +29,18 @@ pub fn spawn_reprocess_manager(executor: TaskExecutor) {
         loop {
             tokio::select! {
                 work =  cache.delays.next() => {
+                    match work {
+                        None => {
+                            // what' this
+                        }
+                        Some(Ok(x)) => {
+                            // x is and `Expired`
+
+                        }
+                        Some(Err(e)) => {
+                            // e is a tokio error
+                        }
+                    }
 
                 }
 
