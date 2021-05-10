@@ -533,6 +533,7 @@ fn spawn_service<T: BeaconChainTypes>(
                                     "error" => %e
                                 ));
                         }
+                        _ => {}
                     }
                 }
             }
