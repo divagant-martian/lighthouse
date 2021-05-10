@@ -81,8 +81,16 @@ pub struct PeerManager<TSpec: EthSpec> {
     discovery: Discovery<TSpec>,
     /// The heartbeat interval to perform routine maintenance.
     heartbeat: tokio::time::Interval,
+    /// Additional configurations for the peer manager.
+    config: RobertConfig,
     /// The logger associated with the `PeerManager`.
     log: slog::Logger,
+}
+
+/// Additional configurations for the peer manager.
+struct RobertConfig {
+    /// Status peers once we connect to them.
+    status_on_connect: bool,
 }
 
 /// The events that the `PeerManager` outputs (requests).
@@ -138,6 +146,9 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
             max_peers: (config.target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as usize,
             discovery,
             heartbeat,
+            config: RobertConfig {
+                status_on_connect: dickson_config.status_on_connect,
+            },
             log: log.clone(),
         })
     }
@@ -772,8 +783,10 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
             }
         }
 
-        // start a ping and status timer for the peer
-        self.status_peers.insert(*peer_id);
+        if self.config.status_on_connect {
+            // start a ping and status timer for the peer
+            self.status_peers.insert(*peer_id);
+        }
 
         // increment prometheus metrics
         metrics::inc_counter(&metrics::PEER_CONNECT_EVENT_COUNT);
