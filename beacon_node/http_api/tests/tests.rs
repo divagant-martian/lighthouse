@@ -2,13 +2,13 @@
 
 use beacon_chain::{
     test_utils::{AttestationStrategy, BeaconChainHarness, BlockStrategy, EphemeralHarnessType},
-    BeaconChain, StateSkipConfig,
+    BeaconChain, StateSkipConfig, MAXIMUM_GOSSIP_CLOCK_DISPARITY,
 };
 use discv5::enr::{CombinedKey, EnrBuilder};
 use environment::null_logger;
 use eth2::Error;
 use eth2::StatusCode;
-use eth2::{types::*, BeaconNodeHttpClient, Url};
+use eth2::{types::*, BeaconNodeHttpClient};
 use eth2_libp2p::{
     rpc::methods::MetaData,
     types::{EnrBitfield, SyncState},
@@ -18,6 +18,8 @@ use futures::stream::{Stream, StreamExt};
 use futures::FutureExt;
 use http_api::{Config, Context};
 use network::NetworkMessage;
+use sensitive_url::SensitiveUrl;
+use slot_clock::SlotClock;
 use state_processing::per_slot_processing;
 use std::convert::TryInto;
 use std::iter::Iterator;
@@ -199,7 +201,7 @@ impl ApiTester {
         tokio::spawn(async { server.await });
 
         let client = BeaconNodeHttpClient::new(
-            Url::parse(&format!(
+            SensitiveUrl::parse(&format!(
                 "http://{}:{}",
                 listening_socket.ip(),
                 listening_socket.port()
@@ -306,7 +308,7 @@ impl ApiTester {
         tokio::spawn(async { server.await });
 
         let client = BeaconNodeHttpClient::new(
-            Url::parse(&format!(
+            SensitiveUrl::parse(&format!(
                 "http://{}:{}",
                 listening_socket.ip(),
                 listening_socket.port()
@@ -879,6 +881,14 @@ impl ApiTester {
 
             let block_root_opt = self.get_block_root(block_id);
 
+            if let BlockId::Slot(slot) = block_id {
+                if block_root_opt.is_none() {
+                    assert!(SKIPPED_SLOTS.contains(&slot.as_u64()));
+                } else {
+                    assert!(!SKIPPED_SLOTS.contains(&slot.as_u64()));
+                }
+            }
+
             let block_opt = block_root_opt.and_then(|root| self.chain.get_block(&root).unwrap());
 
             if block_opt.is_none() && result.is_none() {
@@ -923,7 +933,13 @@ impl ApiTester {
                 .map(|res| res.data.root);
 
             let expected = self.get_block_root(block_id);
-
+            if let BlockId::Slot(slot) = block_id {
+                if expected.is_none() {
+                    assert!(SKIPPED_SLOTS.contains(&slot.as_u64()));
+                } else {
+                    assert!(!SKIPPED_SLOTS.contains(&slot.as_u64()));
+                }
+            }
             assert_eq!(result, expected, "{:?}", block_id);
         }
 
@@ -961,6 +977,14 @@ impl ApiTester {
         for block_id in self.interesting_block_ids() {
             let expected = self.get_block(block_id);
 
+            if let BlockId::Slot(slot) = block_id {
+                if expected.is_none() {
+                    assert!(SKIPPED_SLOTS.contains(&slot.as_u64()));
+                } else {
+                    assert!(!SKIPPED_SLOTS.contains(&slot.as_u64()));
+                }
+            }
+
             let json_result = self
                 .client
                 .get_beacon_blocks(block_id)
@@ -988,6 +1012,14 @@ impl ApiTester {
             let expected = self
                 .get_block(block_id)
                 .map(|block| block.message.body.attestations.into());
+
+            if let BlockId::Slot(slot) = block_id {
+                if expected.is_none() {
+                    assert!(SKIPPED_SLOTS.contains(&slot.as_u64()));
+                } else {
+                    assert!(!SKIPPED_SLOTS.contains(&slot.as_u64()));
+                }
+            }
 
             assert_eq!(result, expected, "{:?}", block_id);
         }
@@ -1682,6 +1714,57 @@ impl ApiTester {
         self
     }
 
+    pub async fn test_get_validator_duties_early(self) -> Self {
+        let current_epoch = self.chain.epoch().unwrap();
+        let next_epoch = current_epoch + 1;
+        let current_epoch_start = self
+            .chain
+            .slot_clock
+            .start_of(current_epoch.start_slot(E::slots_per_epoch()))
+            .unwrap();
+
+        self.chain.slot_clock.set_current_time(
+            current_epoch_start - MAXIMUM_GOSSIP_CLOCK_DISPARITY - Duration::from_millis(1),
+        );
+
+        assert_eq!(
+            self.client
+                .get_validator_duties_proposer(current_epoch)
+                .await
+                .unwrap_err()
+                .status()
+                .map(Into::into),
+            Some(400),
+            "should not get proposer duties outside of tolerance"
+        );
+
+        assert_eq!(
+            self.client
+                .post_validator_duties_attester(next_epoch, &[0])
+                .await
+                .unwrap_err()
+                .status()
+                .map(Into::into),
+            Some(400),
+            "should not get attester duties outside of tolerance"
+        );
+
+        self.chain
+            .slot_clock
+            .set_current_time(current_epoch_start - MAXIMUM_GOSSIP_CLOCK_DISPARITY);
+
+        self.client
+            .get_validator_duties_proposer(current_epoch)
+            .await
+            .expect("should get proposer duties within tolerance");
+        self.client
+            .post_validator_duties_attester(next_epoch, &[0])
+            .await
+            .expect("should get attester duties within tolerance");
+
+        self
+    }
+
     pub async fn test_block_production(self) -> Self {
         let fork = self.chain.head_info().unwrap().fork;
         let genesis_validators_root = self.chain.genesis_validators_root;
@@ -2354,6 +2437,11 @@ async fn node_get() {
         .await
         .test_get_node_peer_count()
         .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_validator_duties_early() {
+    ApiTester::new().test_get_validator_duties_early().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
