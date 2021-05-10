@@ -5,6 +5,7 @@ use crate::discovery::enr;
 use crate::multiaddr::Protocol;
 use crate::rpc::{GoodbyeReason, MetaData, RPCResponseErrorCode, RequestId};
 use crate::types::{error, EnrBitfield, GossipKind};
+use crate::DicksonConfig;
 use crate::EnrExt;
 use crate::{NetworkConfig, NetworkGlobals, PeerAction, ReportSource};
 use futures::prelude::*;
@@ -62,6 +63,7 @@ impl<TSpec: EthSpec> Service<TSpec> {
     pub async fn new(
         executor: task_executor::TaskExecutor,
         config: &NetworkConfig,
+        dickson_config: Option<DicksonConfig>,
         enr_fork_id: EnrForkId,
         log: &Logger,
         chain_spec: &ChainSpec,
@@ -107,11 +109,13 @@ impl<TSpec: EthSpec> Service<TSpec> {
             let (transport, bandwidth) = build_transport(local_keypair.clone())
                 .map_err(|e| format!("Failed to build transport: {:?}", e))?;
 
+            let dickson_config = dickson_config.unwrap_or_default();
             // Lighthouse network behaviour
             let behaviour = Behaviour::new(
                 &local_keypair,
                 config,
                 network_globals.clone(),
+                &dickson_config,
                 &log,
                 chain_spec,
             )

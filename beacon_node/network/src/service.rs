@@ -164,6 +164,7 @@ impl<T: BeaconChainTypes> NetworkService<T> {
         let (network_globals, mut libp2p) = LibP2PService::new(
             executor.clone(),
             config,
+            None,
             enr_fork_id,
             &network_log,
             &beacon_chain.spec,

@@ -14,7 +14,9 @@ mod metrics;
 mod peer_manager;
 pub mod rpc;
 mod service;
+mod dickson;
 pub mod types;
+
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
@@ -76,3 +78,4 @@ pub use peer_manager::{
     ConnectionDirection, PeerConnectionStatus, PeerDB, PeerInfo, PeerSyncStatus, SyncInfo,
 };
 pub use service::{load_private_key, Libp2pEvent, Service, NETWORK_KEY_FILENAME};
+pub use dickson::DicksonConfig;

@@ -1,3 +1,4 @@
+use crate::DicksonConfig;
 use crate::behaviour::gossipsub_scoring_parameters::PeerScoreSettings;
 use crate::peer_manager::{
     score::{PeerAction, ReportSource},
@@ -146,6 +147,7 @@ impl<TSpec: EthSpec> Behaviour<TSpec> {
         local_key: &Keypair,
         net_conf: &NetworkConfig,
         network_globals: Arc<NetworkGlobals<TSpec>>,
+        dickson_config: &DicksonConfig,
         log: &slog::Logger,
         chain_spec: &ChainSpec,
     ) -> error::Result<Self> {
@@ -222,7 +224,7 @@ impl<TSpec: EthSpec> Behaviour<TSpec> {
             eth2_rpc: RPC::new(log.clone()),
             gossipsub,
             identify,
-            peer_manager: PeerManager::new(local_key, net_conf, network_globals.clone(), log)
+            peer_manager: PeerManager::new(local_key, net_conf, dickson_config,network_globals.clone(), log)
                 .await?,
             events: VecDeque::new(),
             peers_to_dc: VecDeque::new(),

@@ -113,6 +113,7 @@ pub async fn build_libp2p_instance(
         LibP2PService::new(
             executor,
             &config,
+            None,
             EnrForkId::default(),
             &log,
             &ChainSpec::minimal(),

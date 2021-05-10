@@ -4,6 +4,7 @@ pub use self::peerdb::*;
 use crate::discovery::{subnet_predicate, Discovery, DiscoveryEvent, TARGET_SUBNET_PEERS};
 use crate::rpc::{GoodbyeReason, MetaData, Protocol, RPCError, RPCResponseErrorCode};
 use crate::types::SyncState;
+use crate::DicksonConfig;
 use crate::{error, metrics, Gossipsub};
 use crate::{EnrExt, NetworkConfig, NetworkGlobals, PeerId, SubnetDiscovery};
 use futures::prelude::*;
@@ -105,6 +106,7 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
     pub async fn new(
         local_key: &Keypair,
         config: &NetworkConfig,
+        dickson_config: &DicksonConfig,
         network_globals: Arc<NetworkGlobals<TSpec>>,
         log: &slog::Logger,
     ) -> error::Result<Self> {
@@ -119,9 +121,19 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
         Ok(PeerManager {
             network_globals,
             events: SmallVec::new(),
-            inbound_ping_peers: HashSetDelay::new(Duration::from_secs(PING_INTERVAL_INBOUND)),
-            outbound_ping_peers: HashSetDelay::new(Duration::from_secs(PING_INTERVAL_OUTBOUND)),
-            status_peers: HashSetDelay::new(Duration::from_secs(STATUS_INTERVAL)),
+            inbound_ping_peers: HashSetDelay::new(Duration::from_secs(
+                dickson_config
+                    .inbound_peers_ping
+                    .unwrap_or(PING_INTERVAL_INBOUND),
+            )),
+            outbound_ping_peers: HashSetDelay::new(Duration::from_secs(
+                dickson_config
+                    .outbound_peers_ping
+                    .unwrap_or(PING_INTERVAL_OUTBOUND),
+            )),
+            status_peers: HashSetDelay::new(Duration::from_secs(
+                dickson_config.status_interval.unwrap_or(STATUS_INTERVAL),
+            )),
             target_peers: config.target_peers,
             max_peers: (config.target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as usize,
             discovery,
