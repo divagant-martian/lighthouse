@@ -319,7 +319,7 @@ pub struct Environment<E: EthSpec> {
     signal_tx: Sender<ShutdownReason>,
     signal: Option<exit_future::Signal>,
     exit: exit_future::Exit,
-    log: Logger,
+    pub log: Logger,
     eth_spec_instance: E,
     pub eth2_config: Eth2Config,
     pub testnet: Option<Eth2NetworkConfig>,
