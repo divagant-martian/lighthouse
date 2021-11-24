@@ -12,7 +12,7 @@ use libp2p::swarm::{
     PollParameters, SubstreamProtocol,
 };
 use libp2p::{Multiaddr, PeerId};
-use rate_limiter::{RPCRateLimiter as RateLimiter, RPCRateLimiterBuilder, RateLimitedErr};
+use rate_limiter::inbound::{RPCRateLimiter as RateLimiter, RPCRateLimiterBuilder, RateLimitedErr};
 use slog::{crit, debug, o};
 use std::marker::PhantomData;
 use std::sync::Arc;
