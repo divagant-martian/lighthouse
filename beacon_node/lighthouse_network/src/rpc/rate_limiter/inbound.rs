@@ -324,8 +324,7 @@ impl<Key: Hash + Eq + Clone> Limiter<Key> {
 
 #[cfg(test)]
 mod tests {
-    use crate::rpc::rate_limiter::{Limiter, Quota};
-    use std::time::Duration;
+    use super::*;
 
     #[test]
     fn it_works_a() {
