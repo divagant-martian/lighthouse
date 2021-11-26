@@ -213,7 +213,10 @@ where
         });
     }
 
-    fn inject_disconnected(&mut self, _peer_id: &PeerId) {}
+    fn inject_disconnected(&mut self, _peer_id: &PeerId) {
+        // ensure we have no requests for this peer? what if we do?
+        // currently or
+    }
 
     fn inject_connection_established(
         &mut self,

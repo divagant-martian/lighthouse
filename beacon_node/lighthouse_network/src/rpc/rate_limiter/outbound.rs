@@ -2,8 +2,30 @@ use std::hash::Hash;
 use std::time::{Duration, Instant};
 
 use fnv::FnvHashMap;
+use libp2p::PeerId;
+use tokio::time::Interval;
 
 use super::Nanosecs;
+
+/// Manages rate limiting of requests per peer, with differentiated rates per protocol.
+pub struct OutboundRateLimiter {
+    /// Interval to prune peers for which their timer ran out.
+    prune_interval: Interval,
+    /// Creation time of the rate limiter.
+    init_time: Instant,
+    /// Goodbye rate limiter.
+    // goodbye_rl: Limiter<PeerId>,
+    /// Ping rate limiter.
+    // ping_rl: Limiter<PeerId>,
+    /// MetaData rate limiter.
+    // metadata_rl: Limiter<PeerId>,
+    /// Status rate limiter.
+    // status_rl: Limiter<PeerId>,
+    /// BlocksByRange rate limiter.
+    bbrange_rl: Limiter<PeerId>,
+    // BlocksByRoot rate limiter.
+    // bbroots_rl: Limiter<PeerId>,
+}
 
 pub struct Limiter<Key: Hash + Eq + Clone> {
     /// Rate given to new keys.
@@ -38,6 +60,29 @@ impl KeyInfo {
 }
 
 impl<Key: Hash + Eq + Clone> Limiter<Key> {
+    pub fn new(
+        initial_rate: u64,
+        max_rate: u64,
+        token_increase: u64,
+        min_increase_interval: Nanosecs,
+    ) -> Result<Self, &'static str> {
+        if initial_rate > max_rate {
+            return Err("initial_rate must respect the max_rate");
+        }
+        if token_increase >= max_rate {
+            return Err("token_increase must be less than the max_rate");
+        }
+        if initial_rate == 0 {
+            return Err("initial_rate must be positive");
+        }
+        Ok(Limiter {
+            initial_rate,
+            max_rate,
+            token_increase,
+            min_increase_interval,
+            key_info: FnvHashMap::default(),
+        })
+    }
     pub fn allows(
         &mut self,
         time_since_start: Duration,
@@ -79,12 +124,12 @@ impl<Key: Hash + Eq + Clone> Limiter<Key> {
         Ok(())
     }
 
-    pub fn use_rejected(&mut self, key: &Key, tokens: u64) -> Result<(), ()> {
+    pub fn reject(&mut self, key: &Key, tokens: u64) -> Result<(), ()> {
         let key_info = self.key_info.get_mut(key).ok_or(())?;
-        // key_info.tokens_in_use
-        // TODO: backoff
+        key_info.tokens_in_use = key_info.tokens_in_use.checked_sub(tokens).ok_or(())?;
+        // exponentially backoff. TODO: this could be a parameter? not sure
+        key_info.rate = (key_info.rate / 2).max(1);
         Ok(())
-
     }
 
     #[cfg(test)]
@@ -179,5 +224,36 @@ mod test {
         assert!(limiter.allows_f32s(2.0, &key, 1).is_ok());
         // max was reached so even after more time, this is rejected
         assert!(limiter.allows_f32s(9.0, &key, 1).is_err());
+    }
+
+    #[test]
+    fn rate_limit_with_replenish_and_backoff() {
+        // The true rate is 3 batches. We start with 2 up to 5
+        let mut limiter = Limiter {
+            initial_rate: 2,
+            key_info: FnvHashMap::default(),
+            max_rate: 5,
+            token_increase: 1,
+            min_increase_interval: Duration::from_secs(1).as_nanos() as u64,
+        };
+        let key = 10;
+
+        // request 2 batches, filling the quota. (rate: 2, used: 2)
+        assert!(limiter.allows_f32s(0.0, &key, 2).is_ok());
+        // one more batch does not fit yet.
+        assert!(limiter.allows_f32s(0.5, &key, 1).is_err());
+        // one more batch should be allowed now. (rate: 3, used: 3)
+        assert!(limiter.allows_f32s(1.0, &key, 1).is_ok());
+        // one more batch should be allowed but will be rejected. (rate: 4, used: 4)
+        assert!(limiter.allows_f32s(2.0, &key, 1).is_ok());
+        // (rate: 2, used: 3)
+        assert!(limiter.reject(&key, 1).is_ok());
+
+        // one batch is accepted (rate: 2, used: 2)
+        assert!(limiter.replenish(&key, 1).is_ok());
+        // one batch should be accepted. (rate: 3, used: 3)
+        assert!(limiter.allows_f32s(3.0, &key, 1).is_ok());
+        // we now circle between rates 2, 3 and 4.
+        assert_eq!(limiter.key_info.get(&key).unwrap().rate, 3);
     }
 }
