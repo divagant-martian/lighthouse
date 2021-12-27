@@ -35,6 +35,9 @@ pub struct PeerInfo<T: EthSpec> {
     connection_status: PeerConnectionStatus,
     /// Ban status of the peer, as seem from the swarm.
     ban_status: BanStatus,
+    /// Whether the peer manager has requested to dial this peer.
+    #[serde(skip)]
+    being_dialed: Option<Instant>,
     /// The known listening addresses of this peer. This is given by identify and can be arbitrary
     /// (including local IPs).
     listening_addresses: Vec<Multiaddr>,
@@ -71,6 +74,7 @@ impl<TSpec: EthSpec> Default for PeerInfo<TSpec> {
             ban_status: BanStatus::Normal {
                 since: Instant::now(),
             },
+            being_dialed: None,
             listening_addresses: Vec::new(),
             seen_addresses: HashSet::new(),
             subnets: HashSet::new(),
@@ -206,7 +210,7 @@ impl<T: EthSpec> PeerInfo<T> {
 
     /// Checks if the status is connected.
     pub fn is_dialing(&self) -> bool {
-        matches!(self.connection_status, PeerConnectionStatus::Dialing { .. })
+        self.being_dialed.is_some()
     }
 
     /// The peer is either connected or in the process of being dialed.
