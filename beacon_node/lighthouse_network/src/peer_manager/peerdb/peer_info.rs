@@ -15,16 +15,26 @@ use strum::AsRefStr;
 use types::EthSpec;
 use PeerConnectionStatus::*;
 
+#[derive(Clone, Debug, Copy)]
+enum BanStatus {
+    Ban { since: Instant },
+    Normal { since: Instant },
+    DisconnectToBan { since: Instant },
+    Disconnect { since: Instant },
+}
+
 /// Information about a given connected peer.
 #[derive(Clone, Debug, Serialize)]
 #[serde(bound = "T: EthSpec")]
 pub struct PeerInfo<T: EthSpec> {
-    /// The peers reputation
+    /// The peers reputation.
     score: Score,
-    /// Client managing this peer
+    /// Client managing this peer.
     client: Client,
-    /// Connection status of this peer
+    /// Connection status of this peer.
     connection_status: PeerConnectionStatus,
+    /// Ban status of the peer, as seem from the swarm.
+    ban_status: BanStatus,
     /// The known listening addresses of this peer. This is given by identify and can be arbitrary
     /// (including local IPs).
     listening_addresses: Vec<Multiaddr>,
@@ -58,6 +68,9 @@ impl<TSpec: EthSpec> Default for PeerInfo<TSpec> {
             score: Score::default(),
             client: Client::default(),
             connection_status: Default::default(),
+            ban_status: BanStatus::Normal {
+                since: Instant::now(),
+            },
             listening_addresses: Vec::new(),
             seen_addresses: HashSet::new(),
             subnets: HashSet::new(),
@@ -204,7 +217,7 @@ impl<T: EthSpec> PeerInfo<T> {
     /// Checks if the connection status is banned. This can lag behind the score state
     /// temporarily.
     pub fn is_banned(&self) -> bool {
-        matches!(self.connection_status, PeerConnectionStatus::Banned { .. })
+        matches!(self.ban_status, BanStatus::Ban { .. })
     }
 
     /// Checks if the peer's score is banned.
@@ -477,6 +490,31 @@ impl Serialize for PeerConnectionStatus {
                 s.end()
             }
         }
+    }
+}
+
+impl Serialize for BanStatus {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut s = serializer.serialize_struct("connection_status", 6)?;
+        match self {
+            BanStatus::Ban { since } => {
+                s.serialize_field("status", "")?;
+                s.serialize_field("updated", &since.elapsed().as_secs())?;
+            }
+            BanStatus::Normal { since } => {
+                s.serialize_field("status", "")?;
+                s.serialize_field("updated", &since.elapsed().as_secs())?;
+            }
+            BanStatus::DisconnectToBan { since } => {
+                s.serialize_field("status", "")?;
+                s.serialize_field("updated", &since.elapsed().as_secs())?;
+            }
+            BanStatus::Disconnect { since } => {
+                s.serialize_field("status", "")?;
+                s.serialize_field("updated", &since.elapsed().as_secs())?;
+            }
+        }
+        s.end()
     }
 }
 
