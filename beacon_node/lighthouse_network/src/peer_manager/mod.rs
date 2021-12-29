@@ -34,30 +34,14 @@ use std::net::IpAddr;
 pub mod config;
 mod network_behaviour;
 
-/// The heartbeat performs regular updates such as updating reputations and performing discovery
-/// requests. This defines the interval in seconds.
-const HEARTBEAT_INTERVAL: u64 = 30;
-
-/// A fraction of `PeerManager::target_peers` that we allow to connect to us in excess of
-/// `PeerManager::target_peers`. For clarity, if `PeerManager::target_peers` is 50 and
-/// PEER_EXCESS_FACTOR = 0.1 we allow 10% more nodes, i.e 55.
-pub const PEER_EXCESS_FACTOR: f32 = 0.1;
-/// A fraction of `PeerManager::target_peers` that need to be outbound-only connections.
-pub const MIN_OUTBOUND_ONLY_FACTOR: f32 = 0.3;
-/// The fraction of extra peers beyond the PEER_EXCESS_FACTOR that we allow us to dial for when
-/// requiring subnet peers. More specifically, if our target peer limit is 50, and our excess peer
-/// limit is 55, and we are at 55 peers, the following parameter provisions a few more slots of
-/// dialing priority peers we need for validator duties.
-pub const PRIORITY_PEER_EXCESS: f32 = 0.1;
 
 pub struct Info<TSpec: EthSpec> {
-    metadata: MetaData<TSpec>,
+    metadata: Option<MetaData<TSpec>>,
 }
 
 /// The main struct that handles peer's reputation and connection status.
 pub struct PeerManager<TSpec: EthSpec> {
     peers: HashMap<PeerId, Info<TSpec>>,
-    sync_status: Arc<RwLock<SyncStatus>>,
     /// A queue of events that the `PeerManager` is waiting to produce.
     events: SmallVec<[PeerManagerEvent; 16]>,
     /// The logger associated with the `PeerManager`.
@@ -107,15 +91,19 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
             ping_interval_outbound,
         } = cfg;
 
-        // Set up the peer manager heartbeat interval
-        let heartbeat = tokio::time::interval(tokio::time::Duration::from_secs(HEARTBEAT_INTERVAL));
-
         Ok(PeerManager {
             peers: HashMap::default(),
-            sync_status: Arc::new(RwLock::new(SyncStatus::Unknown)),
             events: SmallVec::new(),
             log: log.clone(),
         })
+    }
+
+    pub fn test(log: slog::Logger) -> Self {
+        PeerManager {
+            peers: HashMap::default(),
+            events: SmallVec::new(),
+            log,
+        }
     }
 
     /* Public accessible functions */
@@ -324,20 +312,4 @@ enum ConnectingType {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use slog::{o, Drain};
-    use types::MinimalEthSpec as E;
-
-    pub fn build_log(level: slog::Level, enabled: bool) -> slog::Logger {
-        let decorator = slog_term::TermDecorator::new().build();
-        let drain = slog_term::FullFormat::new(decorator).build().fuse();
-        let drain = slog_async::Async::new(drain).build().fuse();
-
-        if enabled {
-            slog::Logger::root(drain.filter_level(level).fuse(), o!())
-        } else {
-            slog::Logger::root(drain.filter(|_| false).fuse(), o!())
-        }
-    }
-}
+mod tests;

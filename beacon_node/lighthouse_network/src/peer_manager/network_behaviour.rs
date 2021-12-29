@@ -55,6 +55,7 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
         endpoint: &ConnectedPoint,
         _failed_addresses: Option<&Vec<Multiaddr>>,
     ) {
+        
     }
 
     fn inject_disconnected(&mut self, peer_id: &PeerId) {}
