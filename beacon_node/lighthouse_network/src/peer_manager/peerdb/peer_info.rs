@@ -336,15 +336,9 @@ impl<T: EthSpec> PeerInfo<T> {
     /// Modifies the status to Dialing
     /// Returns an error if the current state is unexpected.
     pub(super) fn set_dialing_peer(&mut self) -> Result<(), &'static str> {
-        match &mut self.connection_status {
-            Connected { .. } => return Err("Dialing connected peer"),
-            Dialing { .. } => return Err("Dialing an already dialing peer"),
-            Disconnecting { .. } => return Err("Dialing a disconnecting peer"),
-            Disconnected { .. } | Banned { .. } | Unknown => {}
-        }
-        self.connection_status = Dialing {
-            since: Instant::now(),
-        };
+        self.being_dialed = Some(Instant::now());
+        // TODO: since other behaviours can dial a peer too, it is possible (and OK) to dial a peer
+        // more than once.
         Ok(())
     }
 
@@ -353,11 +347,7 @@ impl<T: EthSpec> PeerInfo<T> {
     pub(super) fn connect_ingoing(&mut self, seen_address: Option<SocketAddr>) {
         match &mut self.connection_status {
             Connected { n_in, .. } => *n_in += 1,
-            Disconnected { .. }
-            | Banned { .. }
-            | Dialing { .. }
-            | Disconnecting { .. }
-            | Unknown => {
+            Disconnected { .. } | Unknown => {
                 self.connection_status = Connected { n_in: 1, n_out: 0 };
                 self.connection_direction = Some(ConnectionDirection::Incoming);
             }
@@ -370,22 +360,7 @@ impl<T: EthSpec> PeerInfo<T> {
 
     /// Modifies the status to Connected and increases the number of outgoing
     /// connections by one
-    pub(super) fn connect_outgoing(&mut self, seen_address: Option<SocketAddr>) {
-        match &mut self.connection_status {
-            Connected { n_out, .. } => *n_out += 1,
-            Disconnected { .. }
-            | Banned { .. }
-            | Dialing { .. }
-            | Disconnecting { .. }
-            | Unknown => {
-                self.connection_status = Connected { n_in: 0, n_out: 1 };
-                self.connection_direction = Some(ConnectionDirection::Outgoing);
-            }
-        }
-        if let Some(ip_addr) = seen_address {
-            self.seen_addresses.insert(ip_addr);
-        }
-    }
+    pub(super) fn connect_outgoing(&mut self, seen_address: Option<SocketAddr>) {}
 
     #[cfg(test)]
     /// Add an f64 to a non-trusted peer's score abiding by the limits.
@@ -421,24 +396,9 @@ pub enum PeerConnectionStatus {
         /// number of outgoing connections.
         n_out: u8,
     },
-    /// The peer is being disconnected.
-    Disconnecting {
-        // After the disconnection the peer will be considered banned.
-        to_ban: bool,
-    },
     /// The peer has disconnected.
     Disconnected {
         /// last time the peer was connected or discovered.
-        since: Instant,
-    },
-    /// The peer has been banned and is disconnected.
-    Banned {
-        /// moment when the peer was banned.
-        since: Instant,
-    },
-    /// We are currently dialing this peer.
-    Dialing {
-        /// time since we last communicated with the peer.
         since: Instant,
     },
     /// The connection status has not been specified.
@@ -457,33 +417,12 @@ impl Serialize for PeerConnectionStatus {
                 s.serialize_field("last_seen", &0)?;
                 s.end()
             }
-            Disconnecting { .. } => {
-                s.serialize_field("status", "disconnecting")?;
-                s.serialize_field("connections_in", &0)?;
-                s.serialize_field("connections_out", &0)?;
-                s.serialize_field("last_seen", &0)?;
-                s.end()
-            }
             Disconnected { since } => {
                 s.serialize_field("status", "disconnected")?;
                 s.serialize_field("connections_in", &0)?;
                 s.serialize_field("connections_out", &0)?;
                 s.serialize_field("last_seen", &since.elapsed().as_secs())?;
                 s.serialize_field("banned_ips", &Vec::<IpAddr>::new())?;
-                s.end()
-            }
-            Banned { since } => {
-                s.serialize_field("status", "banned")?;
-                s.serialize_field("connections_in", &0)?;
-                s.serialize_field("connections_out", &0)?;
-                s.serialize_field("last_seen", &since.elapsed().as_secs())?;
-                s.end()
-            }
-            Dialing { since } => {
-                s.serialize_field("status", "dialing")?;
-                s.serialize_field("connections_in", &0)?;
-                s.serialize_field("connections_out", &0)?;
-                s.serialize_field("last_seen", &since.elapsed().as_secs())?;
                 s.end()
             }
             Unknown => {

@@ -640,11 +640,9 @@ impl PeerState {
     pub fn from_peer_connection_status(status: &PeerConnectionStatus) -> Self {
         match status {
             PeerConnectionStatus::Connected { .. } => PeerState::Connected,
-            PeerConnectionStatus::Dialing { .. } => PeerState::Connecting,
-            PeerConnectionStatus::Disconnecting { .. } => PeerState::Disconnecting,
-            PeerConnectionStatus::Disconnected { .. }
-            | PeerConnectionStatus::Banned { .. }
-            | PeerConnectionStatus::Unknown => PeerState::Disconnected,
+            PeerConnectionStatus::Disconnected { .. } | PeerConnectionStatus::Unknown => {
+                PeerState::Disconnected
+            }
         }
     }
 }
