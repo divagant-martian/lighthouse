@@ -45,3 +45,36 @@ fn test_connection_tracking() {
     pm.inject_disconnected(&p);
     assert!(!pm.is_connected(&p));
 }
+
+/// Test that the peer manager maintains the bound of disconnected peers, as well as the count of
+/// disconnected peers.
+#[test]
+fn test_disconnected_maintainance() {
+    let max_disconnected_peers = 2;
+    let mut cfg = config::Config {
+        max_disconnected_peers,
+        ..Default::default()
+    };
+
+    let mut pm = PeerManager::<E>::test_cfg(log(), cfg);
+
+    // connect and disconnect `max_disconnected_peers + 1` peers
+    let conn_id = ConnectionId::new(0);
+    let address = Multiaddr::empty();
+    let endpoint = ConnectedPoint::Dialer { address };
+    let mut expected_dc = 0;
+    for _ in 0..=max_disconnected_peers {
+        let p = PeerId::random();
+        pm.inject_connection_established(&p, &conn_id, &endpoint, None);
+        assert_eq!(expected_dc, pm.disconnected_count);
+
+        let handler = pm.new_handler();
+        pm.inject_connection_closed(&p, &conn_id, &endpoint, handler);
+        pm.inject_disconnected(&p);
+        expected_dc = max_disconnected_peers.min(expected_dc + 1);
+        assert_eq!(expected_dc, pm.disconnected_count);
+    }
+
+    assert_eq!(pm.peers.len(), max_disconnected_peers);
+    assert_eq!(pm.disconnected_count, max_disconnected_peers);
+}

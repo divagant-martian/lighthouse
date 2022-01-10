@@ -20,6 +20,8 @@ pub struct Config {
     pub metrics_enabled: bool,
     /// Target number of peers to connect to.
     pub target_peer_count: usize,
+    /// Number of disconnected peers to remember at most.
+    pub max_disconnected_peers: usize,
 
     /* RPC related configurations */
     /// Time in seconds between status requests sent to peers.
@@ -41,6 +43,7 @@ impl Default for Config {
             status_interval: DEFAULT_STATUS_INTERVAL,
             ping_interval_inbound: DEFAULT_PING_INTERVAL_INBOUND,
             ping_interval_outbound: DEFAULT_PING_INTERVAL_OUTBOUND,
+            max_disconnected_peers: 5000,
         }
     }
 }

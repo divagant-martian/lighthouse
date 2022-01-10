@@ -11,7 +11,7 @@ use libp2p::swarm::{
     DialError, NetworkBehaviour, NetworkBehaviourAction, PollParameters, ProtocolsHandler,
 };
 use libp2p::{Multiaddr, PeerId};
-use slog::{crit, debug, error};
+use slog::{crit, debug, error, trace};
 use smallvec::SmallVec;
 use types::EthSpec;
 
@@ -85,7 +85,9 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                         *connection_status = ConnectionStatus::Connected {
                             ids: HashMap::from([(*connection_id, endpoint.to_endpoint())]),
                             since: Instant::now(),
-                        }
+                        };
+                        // Previously disconnected peer is connected now.
+                        self.disconnected_count -= 1;
                     }
                 }
             }
@@ -128,17 +130,21 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
     }
 
     fn inject_disconnected(&mut self, peer_id: &PeerId) {
-        match self.peers.entry(*peer_id) {
-            Entry::Occupied(mut entry) => {
+        match self.peers.get_mut(peer_id) {
+            Some(info) => {
+                // Set the peer as disconnected.
                 let prev_connection_status = std::mem::replace(
-                    &mut entry.get_mut().connection_status,
+                    &mut info.connection_status,
                     ConnectionStatus::Disconnected {
                         since: Instant::now(),
                     },
                 );
                 // Peer was known. It should be connected with 0 connections.
                 match prev_connection_status {
-                    ConnectionStatus::Connected { ids, since: _ } => debug_assert!(ids.is_empty()),
+                    ConnectionStatus::Connected { ids, since: _ } => {
+                        debug_assert!(ids.is_empty());
+                        self.disconnected_count += 1;
+                    }
                     ConnectionStatus::Disconnected { since: _ } => {
                         #[cfg(debug_assertions)]
                         panic!(
@@ -149,8 +155,47 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                         crit!(self.log, "Disconnected from already disconnected peer"; "peer_id" => %peer_id);
                     }
                 }
+
+                // Check if disconnecting this peer exceeds the max num of DC'd peers bound.
+                while self.disconnected_count > self.config.max_disconnected_peers {
+                    // TODO: for now simply drop the peer that has been disconnected the longest
+                    let oldest_dc = self
+                        .peers
+                        .iter()
+                        .filter_map(|(p, info)| {
+                            if let ConnectionStatus::Disconnected { since } = info.connection_status
+                            {
+                                Some((*p, since))
+                            } else {
+                                None
+                            }
+                        })
+                        .max_by_key(|(_peer_id, dc_instant)| dc_instant.elapsed().as_nanos());
+                    match oldest_dc {
+                        Some((p, _dc_instant)) => {
+                            trace!(self.log, "Removing old disconnected peer"; "peer_id" => %p);
+                            self.peers.remove(&p);
+                            self.disconnected_count -= 1;
+                        }
+                        None => {
+                            // This is a bug.
+                            let truly_dc = self
+                                .peers
+                                .values()
+                                .filter(|info| info.is_connected())
+                                .count();
+                            #[cfg(debug_assertions)]
+                            panic!(
+                                "Wrong number of disconnected peers. Registered:{}, real:{}",
+                                self.disconnected_count, truly_dc
+                            );
+                            crit!(self.log, "Adjusting de-synced disconnected peers count"; "prev" => self.disconnected_count, "new" => truly_dc);
+                            self.disconnected_count = truly_dc;
+                        }
+                    }
+                }
             }
-            Entry::Vacant(_) => {
+            None => {
                 #[cfg(debug_assertions)]
                 panic!("Disconnected from unknown peer: {}", peer_id,);
                 crit!(self.log, "Disconnected from unknown peer"; "peer_id" => %peer_id);

@@ -47,7 +47,12 @@ pub struct Info<TSpec: EthSpec> {
 
 /// The main struct that handles peer's reputation and connection status.
 pub struct PeerManager<TSpec: EthSpec> {
+    /// Peer manager configuration parameters.
+    config: config::Config,
+    /// Known peers.
     peers: HashMap<PeerId, Info<TSpec>>,
+    /// Number of disconnected peers in `peers`.
+    disconnected_count: usize,
     /// A queue of events that the `PeerManager` is waiting to produce.
     events: SmallVec<[PeerManagerEvent; 16]>,
     /// The logger associated with the `PeerManager`.
@@ -84,21 +89,14 @@ pub enum PeerManagerEvent {
 impl<TSpec: EthSpec> PeerManager<TSpec> {
     // NOTE: Must be run inside a tokio executor.
     pub async fn new(
-        cfg: config::Config,
+        config: config::Config,
         network_globals: Arc<NetworkGlobals<TSpec>>,
         log: &slog::Logger,
     ) -> error::Result<Self> {
-        let config::Config {
-            discovery_enabled,
-            metrics_enabled,
-            target_peer_count,
-            status_interval,
-            ping_interval_inbound,
-            ping_interval_outbound,
-        } = cfg;
-
         Ok(PeerManager {
+            config,
             peers: HashMap::default(),
+            disconnected_count: 0,
             events: SmallVec::new(),
             log: log.clone(),
         })
@@ -106,7 +104,19 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
 
     pub fn test(log: slog::Logger) -> Self {
         PeerManager {
+            config: config::Config::default(),
             peers: HashMap::default(),
+            disconnected_count: 0,
+            events: SmallVec::new(),
+            log,
+        }
+    }
+
+    pub fn test_cfg(log: slog::Logger, config: config::Config) -> Self {
+        PeerManager {
+            config,
+            peers: HashMap::default(),
+            disconnected_count: 0,
             events: SmallVec::new(),
             log,
         }
