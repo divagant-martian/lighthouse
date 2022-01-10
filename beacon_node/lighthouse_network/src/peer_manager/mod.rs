@@ -31,12 +31,18 @@ use peerdb::score::{PeerAction, ReportSource};
 pub use peerdb::sync_status::{SyncInfo, SyncStatus};
 use std::collections::{hash_map::Entry, HashMap};
 use std::net::IpAddr;
+
+use self::network_behaviour::ConnectionStatus;
 pub mod config;
 mod network_behaviour;
 
+#[cfg(test)]
+mod tests;
 
+#[derive(Debug, PartialEq)]
 pub struct Info<TSpec: EthSpec> {
     metadata: Option<MetaData<TSpec>>,
+    connection_status: ConnectionStatus,
 }
 
 /// The main struct that handles peer's reputation and connection status.
@@ -194,7 +200,10 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
     }
 
     pub fn is_connected(&self, peer_id: &PeerId) -> bool {
-        true
+        self.peers
+            .get(peer_id)
+            .map(|info| info.is_connected())
+            .unwrap_or(false)
     }
 
     /// Reports whether the peer limit is reached in which case we stop allowing new incoming
@@ -311,5 +320,8 @@ enum ConnectingType {
     },
 }
 
-#[cfg(test)]
-mod tests;
+impl<TSpec: EthSpec> Info<TSpec> {
+    fn is_connected(&self) -> bool {
+        matches!(self.connection_status, ConnectionStatus::Connected { .. })
+    }
+}

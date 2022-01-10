@@ -29,15 +29,19 @@ fn log() -> slog::Logger {
 /// circumstances.
 #[test]
 fn test_connection_tracking() {
-    // Normal circumstances: Actually just pretending to be informed of connections the way a swarm
-    // would
+    // Normal circumstances: just pretending to be informed of connections the way a swarm would
     let mut pm = PeerManager::<E>::test(log());
-    pm.inject_connection_established(
-        &PeerId::random(),
-        &ConnectionId::new(0),
-        &ConnectedPoint::Dialer {
-            address: Multiaddr::empty(),
-        },
-        None,
-    )
+
+    let p = PeerId::random();
+    let conn_id = ConnectionId::new(0);
+    let address = Multiaddr::empty();
+    let endpoint = ConnectedPoint::Dialer { address };
+
+    pm.inject_connection_established(&p, &conn_id, &endpoint, None);
+    assert!(pm.is_connected(&p));
+
+    let handler = pm.new_handler();
+    pm.inject_connection_closed(&p, &conn_id, &endpoint, handler);
+    pm.inject_disconnected(&p);
+    assert!(!pm.is_connected(&p));
 }
