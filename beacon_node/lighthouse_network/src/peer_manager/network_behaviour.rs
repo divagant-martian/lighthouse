@@ -29,6 +29,8 @@ pub enum ConnectionStatus {
         ids: HashMap<ConnectionId, Endpoint>,
         /// If the peer has multiple connections, the time it first connected.
         since: Instant,
+        /// Whether the peer was reported as connected.
+        reported: bool,
     },
     Disconnected {
         /// Time at which the peer disconnected.
@@ -77,7 +79,7 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
             Entry::Occupied(mut entry) => {
                 let connection_status = &mut entry.get_mut().connection_status;
                 match connection_status {
-                    ConnectionStatus::Connected { ids, since } => {
+                    ConnectionStatus::Connected { ids, .. } => {
                         let id_was_known = ids.insert(*connection_id, endpoint.to_endpoint());
                         debug_assert!(id_was_known.is_none());
                     }
@@ -85,6 +87,7 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                         *connection_status = ConnectionStatus::Connected {
                             ids: HashMap::from([(*connection_id, endpoint.to_endpoint())]),
                             since: Instant::now(),
+                            reported: false,
                         };
                         // Previously disconnected peer is connected now.
                         self.disconnected_count -= 1;
@@ -98,6 +101,7 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                     connection_status: ConnectionStatus::Connected {
                         ids: HashMap::from([(*connection_id, endpoint.to_endpoint())]),
                         since: Instant::now(),
+                        reported: false,
                     },
                 });
             }
@@ -111,7 +115,7 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
         endpoint: &ConnectedPoint,
         _: DummyProtocolsHandler,
     ) {
-        if let Some(ConnectionStatus::Connected { ids, since: _ }) = self
+        if let Some(ConnectionStatus::Connected { ids, .. }) = self
             .peers
             .get_mut(peer_id)
             .map(|info| &mut info.connection_status)
@@ -141,7 +145,7 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                 );
                 // Peer was known. It should be connected with 0 connections.
                 match prev_connection_status {
-                    ConnectionStatus::Connected { ids, since: _ } => {
+                    ConnectionStatus::Connected { ids, .. } => {
                         debug_assert!(ids.is_empty());
                         self.disconnected_count += 1;
                     }
