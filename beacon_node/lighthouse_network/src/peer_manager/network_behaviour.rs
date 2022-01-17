@@ -26,7 +26,10 @@ use super::{PeerManager, PeerManagerEvent, ReportSource};
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConnectionStatus {
     Connected {
-        ids: HashMap<ConnectionId, Endpoint>,
+        /// Id of the peer's connection. We allow only a connection per peer (at the Swarm level).
+        conn_id: ConnectionId,
+        /// Direction of the peer's connection.
+        direction: Endpoint,
         /// If the peer has multiple connections, the time it first connected.
         since: Instant,
         /// Whether the peer was reported as connected.
@@ -75,17 +78,44 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
         endpoint: &ConnectedPoint,
         _failed_addresses: Option<&Vec<Multiaddr>>,
     ) {
+        // Decide if we want the peer.
+        let allowed_peers = self
+            .peers
+            .values()
+            .filter(|info| info.is_connected_allowed())
+            .count();
+        let reported = allowed_peers < self.config.target_peer_count;
+
+        let conn_direction = endpoint.to_endpoint();
         match self.peers.entry(*peer_id) {
             Entry::Occupied(mut entry) => {
                 let connection_status = &mut entry.get_mut().connection_status;
                 match connection_status {
-                    ConnectionStatus::Connected { ids, .. } => {
-                        let id_was_known = ids.insert(*connection_id, endpoint.to_endpoint());
-                        debug_assert!(id_was_known.is_none());
+                    ConnectionStatus::Connected {
+                        conn_id,
+                        direction,
+                        since,
+                        reported,
+                    } => {
+                        // Even if the id matches this should be called only once. So either way
+                        // this is problematic
+                        #[cfg(debug_assertions)]
+                        panic!(
+                            "Connected to an already connected peer: {}. \
+                               Prev conn:{:?}:{:?}. \
+                               New conn:{:?}:{:?}",
+                            peer_id, conn_id, direction, connection_id, endpoint
+                        );
+                        // Update the info
+                        crit!(self.log, "Adjusting out of sync info for connected peer"; "peer_id" => %peer_id);
+                        *conn_id = *connection_id;
+                        *direction = conn_direction;
+                        *since = Instant::now();
                     }
                     ConnectionStatus::Disconnected { since } => {
                         *connection_status = ConnectionStatus::Connected {
-                            ids: HashMap::from([(*connection_id, endpoint.to_endpoint())]),
+                            conn_id: *connection_id,
+                            direction: conn_direction,
                             since: Instant::now(),
                             reported: false,
                         };
@@ -99,7 +129,8 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                 entry.insert(super::Info {
                     metadata: None,
                     connection_status: ConnectionStatus::Connected {
-                        ids: HashMap::from([(*connection_id, endpoint.to_endpoint())]),
+                        conn_id: *connection_id,
+                        direction: conn_direction,
                         since: Instant::now(),
                         reported: false,
                     },
@@ -115,96 +146,81 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
         endpoint: &ConnectedPoint,
         _: DummyProtocolsHandler,
     ) {
-        if let Some(ConnectionStatus::Connected { ids, .. }) = self
-            .peers
-            .get_mut(peer_id)
-            .map(|info| &mut info.connection_status)
-        {
-            let id_was_known = ids.remove(connection_id);
-            debug_assert_eq!(id_was_known, Some(endpoint.to_endpoint()));
-        } else {
-            #[cfg(debug_assertions)]
-            panic!(
-                "Connection closed for a peer in unexpected state: {}, {:?}",
-                peer_id,
-                self.peers.get(peer_id)
-            );
-            crit!(self.log, "Connection closed for a peer in unexpected state"; "peer_id" => %peer_id);
+        // Update the connection status of the peer.
+        let conn_direction = endpoint.to_endpoint();
+        match self.peers.entry(*peer_id) {
+            Entry::Occupied(mut entry) => {
+                let connection_status = &mut entry.get_mut().connection_status;
+                match connection_status {
+                    ConnectionStatus::Disconnected { since } => {
+                        // Even if the id matches this should be called only once. So either way
+                        // this is problematic
+                        #[cfg(debug_assertions)]
+                        panic!(
+                            "Disconnected from an already disconnected peer: {}. \
+                             Conn:{:?}:{:?}",
+                            peer_id, connection_id, endpoint,
+                        );
+                        // Update the info
+                        crit!(self.log, "Disconnected from already disconnected peer"; "peer_id" => %peer_id);
+                        *since = Instant::now();
+                    }
+                    ConnectionStatus::Connected {
+                        conn_id,
+                        direction,
+                        since,
+                        reported,
+                    } => {
+                        debug_assert_eq!(conn_id, connection_id);
+                        debug_assert_eq!(direction, &conn_direction);
+                        *connection_status = ConnectionStatus::Disconnected {
+                            since: Instant::now(),
+                        };
+                        // Previously connected peer is disconnected now.
+                        self.disconnected_count += 1;
+                    }
+                }
+            }
+            Entry::Vacant(entry) => {
+                // Peer is unknown. We should know of this peer.
+                #[cfg(debug_assertions)]
+                panic!(
+                    "Disconnected from unknown peer: {}. Conn:{:?}:{:?}",
+                    peer_id, connection_id, conn_direction
+                );
+                entry.insert(super::Info {
+                    metadata: None,
+                    connection_status: ConnectionStatus::Disconnected {
+                        since: Instant::now(),
+                    },
+                });
+            }
+        }
+
+        // Check if this recently connected peer makes the number of disconnected peers too large.
+    }
+
+    #[cfg(debug_assertions)]
+    fn inject_disconnected(&mut self, peer_id: &PeerId) {
+        // We might not know of this peer if it was purged to keep the number of disconnected peers
+        // bounded.
+        if let Some(info) = self.peers.get(peer_id) {
+            assert!(matches!(
+                info.connection_status,
+                ConnectionStatus::Disconnected { .. }
+            ))
         }
     }
 
-    fn inject_disconnected(&mut self, peer_id: &PeerId) {
-        match self.peers.get_mut(peer_id) {
-            Some(info) => {
-                // Set the peer as disconnected.
-                let prev_connection_status = std::mem::replace(
-                    &mut info.connection_status,
-                    ConnectionStatus::Disconnected {
-                        since: Instant::now(),
-                    },
-                );
-                // Peer was known. It should be connected with 0 connections.
-                match prev_connection_status {
-                    ConnectionStatus::Connected { ids, .. } => {
-                        debug_assert!(ids.is_empty());
-                        self.disconnected_count += 1;
-                    }
-                    ConnectionStatus::Disconnected { since: _ } => {
-                        #[cfg(debug_assertions)]
-                        panic!(
-                            "Disconnected from a disconnected peer: {}, {:?}",
-                            peer_id,
-                            self.peers.get(peer_id)
-                        );
-                        crit!(self.log, "Disconnected from already disconnected peer"; "peer_id" => %peer_id);
-                    }
-                }
-
-                // Check if disconnecting this peer exceeds the max num of DC'd peers bound.
-                while self.disconnected_count > self.config.max_disconnected_peers {
-                    // TODO: for now simply drop the peer that has been disconnected the longest
-                    let oldest_dc = self
-                        .peers
-                        .iter()
-                        .filter_map(|(p, info)| {
-                            if let ConnectionStatus::Disconnected { since } = info.connection_status
-                            {
-                                Some((*p, since))
-                            } else {
-                                None
-                            }
-                        })
-                        .max_by_key(|(_peer_id, dc_instant)| dc_instant.elapsed().as_nanos());
-                    match oldest_dc {
-                        Some((p, _dc_instant)) => {
-                            trace!(self.log, "Removing old disconnected peer"; "peer_id" => %p);
-                            self.peers.remove(&p);
-                            self.disconnected_count -= 1;
-                        }
-                        None => {
-                            // This is a bug.
-                            let truly_dc = self
-                                .peers
-                                .values()
-                                .filter(|info| info.is_connected())
-                                .count();
-                            #[cfg(debug_assertions)]
-                            panic!(
-                                "Wrong number of disconnected peers. Registered:{}, real:{}",
-                                self.disconnected_count, truly_dc
-                            );
-                            crit!(self.log, "Adjusting de-synced disconnected peers count"; "prev" => self.disconnected_count, "new" => truly_dc);
-                            self.disconnected_count = truly_dc;
-                        }
-                    }
-                }
-            }
-            None => {
-                #[cfg(debug_assertions)]
-                panic!("Disconnected from unknown peer: {}", peer_id,);
-                crit!(self.log, "Disconnected from unknown peer"; "peer_id" => %peer_id);
-            }
-        }
+    #[cfg(debug_assertions)]
+    fn inject_connected(&mut self, peer_id: &PeerId) {
+        // A connected peer should always be known.
+        let conn_status = &self
+            .peers
+            .get(peer_id)
+            .expect("Connected peer should be known")
+            .connection_status;
+        assert!(matches!(conn_status, ConnectionStatus::Connected { .. }));
     }
 
     fn inject_address_change(
@@ -220,13 +236,5 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
             "Peer's connection direction has changed: {}",
             peer_id
         )
-    }
-
-    fn inject_dial_failure(
-        &mut self,
-        peer_id: Option<PeerId>,
-        _handler: DummyProtocolsHandler,
-        _error: &DialError,
-    ) {
     }
 }

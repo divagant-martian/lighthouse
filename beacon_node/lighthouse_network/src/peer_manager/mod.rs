@@ -212,7 +212,7 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
     pub fn is_connected(&self, peer_id: &PeerId) -> bool {
         self.peers
             .get(peer_id)
-            .map(|info| info.is_connected())
+            .map(|info| info.is_connected_allowed())
             .unwrap_or(false)
     }
 
@@ -331,7 +331,10 @@ enum ConnectingType {
 }
 
 impl<TSpec: EthSpec> Info<TSpec> {
-    fn is_connected(&self) -> bool {
-        matches!(self.connection_status, ConnectionStatus::Connected { .. })
+    fn is_connected_allowed(&self) -> bool {
+        matches!(
+            self.connection_status,
+            ConnectionStatus::Connected { reported: true, .. }
+        )
     }
 }
