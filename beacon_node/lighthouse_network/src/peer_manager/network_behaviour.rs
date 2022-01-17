@@ -197,7 +197,30 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
             }
         }
 
-        // Check if this recently connected peer makes the number of disconnected peers too large.
+        // Check if this recently disconnected peer makes the number of disconnected peers too large.
+        while self
+            .peers
+            .values()
+            .filter(|info| !info.is_connected())
+            .count()
+            > self.config.max_disconnected_peers
+        {
+            let (oldest_dc, peer_dc_time) = self
+                .peers
+                .iter()
+                .filter_map(|(peer_id, info)| {
+                    if let ConnectionStatus::Disconnected { since } = info.connection_status {
+                        Some((*peer_id, since.as_millis()))
+                    } else {
+                        None
+                    }
+                })
+                .max_by_key(|(_peer_id, dc_duration)| dc_duration)
+                .expect("Disconnected peer count > 0");
+
+            trace!(self.log, "Purging disconnected peer"; "peer_id" => %peer_id, "dc_time_ms" => peer_dc_time );
+            self.peers.remove(&oldest_dc);
+        }
     }
 
     #[cfg(debug_assertions)]

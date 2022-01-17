@@ -331,10 +331,14 @@ enum ConnectingType {
 }
 
 impl<TSpec: EthSpec> Info<TSpec> {
-    fn is_connected_allowed(&self) -> bool {
+    pub fn is_connected_allowed(&self) -> bool {
         matches!(
             self.connection_status,
             ConnectionStatus::Connected { reported: true, .. }
         )
+    }
+
+    fn is_connected(&self) -> _ {
+        matches!(self.connection_status, ConnectionStatus::Connected { .. })
     }
 }
