@@ -207,7 +207,7 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
     pub fn is_connected(&self, peer_id: &PeerId) -> bool {
         self.peers
             .get(peer_id)
-            .map(|info| info.is_connected()) // TODO: change for allowed here
+            .map(|info| info.is_connected_allowed())
             .unwrap_or(false)
     }
 

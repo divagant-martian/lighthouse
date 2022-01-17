@@ -66,6 +66,10 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
         cx: &mut Context<'_>,
         _params: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ProtocolsHandler>> {
+        if !self.events.is_empty() {
+            return Poll::Ready(NetworkBehaviourAction::GenerateEvent(self.events.remove(0)));
+        }
+
         Poll::Pending
     }
 
@@ -84,7 +88,7 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
             .values()
             .filter(|info| info.is_connected_allowed())
             .count();
-        let reported = allowed_peers < self.config.target_peer_count;
+        let allow = allowed_peers < self.config.target_peer_count;
 
         let conn_direction = endpoint.to_endpoint();
         match self.peers.entry(*peer_id) {
@@ -111,13 +115,14 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                         *conn_id = *connection_id;
                         *direction = conn_direction;
                         *since = Instant::now();
+                        *reported = allow;
                     }
                     ConnectionStatus::Disconnected { since } => {
                         *connection_status = ConnectionStatus::Connected {
                             conn_id: *connection_id,
                             direction: conn_direction,
                             since: Instant::now(),
-                            reported: false,
+                            reported: allow,
                         };
                     }
                 }
@@ -130,10 +135,19 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                         conn_id: *connection_id,
                         direction: conn_direction,
                         since: Instant::now(),
-                        reported: false,
+                        reported: allow,
                     },
                 });
             }
+        }
+
+        debug!(self.log, "Connected to peer"; "peer_id" => %peer_id, "conn_direction" => ?conn_direction, "allowed" => allow);
+        if allow {
+            let ev = match conn_direction {
+                Endpoint::Dialer => PeerManagerEvent::PeerConnectedOutgoing(*peer_id),
+                Endpoint::Listener => PeerManagerEvent::PeerConnectedIncoming(*peer_id),
+            };
+            self.events.push(ev)
         }
     }
 
@@ -146,7 +160,7 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
     ) {
         // Update the connection status of the peer.
         let conn_direction = endpoint.to_endpoint();
-        match self.peers.entry(*peer_id) {
+        let report_dc = match self.peers.entry(*peer_id) {
             Entry::Occupied(mut entry) => {
                 let connection_status = &mut entry.get_mut().connection_status;
                 match connection_status {
@@ -162,6 +176,7 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                         // Update the info
                         crit!(self.log, "Disconnected from already disconnected peer"; "peer_id" => %peer_id);
                         *since = Instant::now();
+                        false
                     }
                     ConnectionStatus::Connected {
                         conn_id,
@@ -171,9 +186,11 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                     } => {
                         debug_assert_eq!(conn_id, connection_id);
                         debug_assert_eq!(direction, &conn_direction);
+                        let report_dc = *reported;
                         *connection_status = ConnectionStatus::Disconnected {
                             since: Instant::now(),
                         };
+                        report_dc
                     }
                 }
             }
@@ -190,7 +207,17 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                         since: Instant::now(),
                     },
                 });
+
+                // Since this is a bug, better asume that the peer was reported.
+                true
             }
+        };
+
+        debug!(self.log, "Disconnected from peer"; "peer_id" => %peer_id, "conn_direction" => ?conn_direction, "to_report" => report_dc);
+        // Report the disconnected peer if needed.
+        if report_dc {
+            self.events
+                .push(PeerManagerEvent::PeerDisconnected(*peer_id));
         }
 
         // Check if this recently disconnected peer makes the number of disconnected peers too large.
