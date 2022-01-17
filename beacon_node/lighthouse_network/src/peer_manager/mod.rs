@@ -51,8 +51,6 @@ pub struct PeerManager<TSpec: EthSpec> {
     config: config::Config,
     /// Known peers.
     peers: HashMap<PeerId, Info<TSpec>>,
-    /// Number of disconnected peers in `peers`.
-    disconnected_count: usize,
     /// A queue of events that the `PeerManager` is waiting to produce.
     events: SmallVec<[PeerManagerEvent; 16]>,
     /// The logger associated with the `PeerManager`.
@@ -96,7 +94,6 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
         Ok(PeerManager {
             config,
             peers: HashMap::default(),
-            disconnected_count: 0,
             events: SmallVec::new(),
             log: log.clone(),
         })
@@ -106,7 +103,6 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
         PeerManager {
             config: config::Config::default(),
             peers: HashMap::default(),
-            disconnected_count: 0,
             events: SmallVec::new(),
             log,
         }
@@ -116,7 +112,6 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
         PeerManager {
             config,
             peers: HashMap::default(),
-            disconnected_count: 0,
             events: SmallVec::new(),
             log,
         }
@@ -212,7 +207,7 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
     pub fn is_connected(&self, peer_id: &PeerId) -> bool {
         self.peers
             .get(peer_id)
-            .map(|info| info.is_connected_allowed())
+            .map(|info| info.is_connected()) // TODO: change for allowed here
             .unwrap_or(false)
     }
 
@@ -338,7 +333,7 @@ impl<TSpec: EthSpec> Info<TSpec> {
         )
     }
 
-    fn is_connected(&self) -> _ {
+    fn is_connected(&self) -> bool {
         matches!(self.connection_status, ConnectionStatus::Connected { .. })
     }
 }

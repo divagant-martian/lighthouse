@@ -119,8 +119,6 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                             since: Instant::now(),
                             reported: false,
                         };
-                        // Previously disconnected peer is connected now.
-                        self.disconnected_count -= 1;
                     }
                 }
             }
@@ -176,8 +174,6 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                         *connection_status = ConnectionStatus::Disconnected {
                             since: Instant::now(),
                         };
-                        // Previously connected peer is disconnected now.
-                        self.disconnected_count += 1;
                     }
                 }
             }
@@ -210,12 +206,12 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
                 .iter()
                 .filter_map(|(peer_id, info)| {
                     if let ConnectionStatus::Disconnected { since } = info.connection_status {
-                        Some((*peer_id, since.as_millis()))
+                        Some((*peer_id, since.elapsed().as_millis()))
                     } else {
                         None
                     }
                 })
-                .max_by_key(|(_peer_id, dc_duration)| dc_duration)
+                .max_by_key(|(_peer_id, dc_duration)| *dc_duration)
                 .expect("Disconnected peer count > 0");
 
             trace!(self.log, "Purging disconnected peer"; "peer_id" => %peer_id, "dc_time_ms" => peer_dc_time );

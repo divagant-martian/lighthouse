@@ -66,15 +66,12 @@ fn test_disconnected_maintainance() {
     for _ in 0..=max_disconnected_peers {
         let p = PeerId::random();
         pm.inject_connection_established(&p, &conn_id, &endpoint, None);
-        assert_eq!(expected_dc, pm.disconnected_count);
 
         let handler = pm.new_handler();
         pm.inject_connection_closed(&p, &conn_id, &endpoint, handler);
         pm.inject_disconnected(&p);
         expected_dc = max_disconnected_peers.min(expected_dc + 1);
-        assert_eq!(expected_dc, pm.disconnected_count);
     }
 
     assert_eq!(pm.peers.len(), max_disconnected_peers);
-    assert_eq!(pm.disconnected_count, max_disconnected_peers);
 }
