@@ -1,3 +1,6 @@
+use fnv::FnvHashSet;
+use libp2p::PeerId;
+
 /// The time in seconds between re-status's peers.
 pub const DEFAULT_STATUS_INTERVAL: u64 = 300;
 
@@ -22,6 +25,8 @@ pub struct Config {
     pub target_peer_count: usize,
     /// Number of disconnected peers to remember at most.
     pub max_disconnected_peers: usize,
+    /// `PeerId`s to consider trusted peers. These peers are not scored.
+    pub trusted_peers: FnvHashSet<PeerId>,
 
     /* RPC related configurations */
     /// Time in seconds between status requests sent to peers.
@@ -40,10 +45,11 @@ impl Default for Config {
             discovery_enabled: true,
             metrics_enabled: false,
             target_peer_count: DEFAULT_TARGET_PEERS,
+            max_disconnected_peers: 5000,
+            trusted_peers: FnvHashSet::default(),
             status_interval: DEFAULT_STATUS_INTERVAL,
             ping_interval_inbound: DEFAULT_PING_INTERVAL_INBOUND,
             ping_interval_outbound: DEFAULT_PING_INTERVAL_OUTBOUND,
-            max_disconnected_peers: 5000,
         }
     }
 }
