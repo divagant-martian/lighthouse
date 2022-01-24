@@ -1,7 +1,6 @@
 use crate::behaviour::{
     save_metadata_to_disk, Behaviour, BehaviourEvent, PeerRequestId, Request, Response,
 };
-use crate::config::NetworkLoad;
 use crate::discovery::enr;
 use crate::multiaddr::Protocol;
 use crate::rpc::{
@@ -108,7 +107,7 @@ impl<TSpec: EthSpec> Service<TSpec> {
             &log,
         ));
 
-        info!(log, "Libp2p Starting"; "peer_id" => %enr.peer_id(), "bandwidth_config" => format!("{}-{}", config.network_load, NetworkLoad::from(config.network_load).name));
+        info!(log, "Libp2p Starting"; "peer_id" => %enr.peer_id(), "bandwidth_config" => format!("{}-{}", config.network_load as u8, config.network_load.params().name));
         let discovery_string = if config.disable_discovery {
             "None".into()
         } else {

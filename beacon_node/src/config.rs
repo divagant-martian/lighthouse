@@ -629,7 +629,8 @@ pub fn set_network_config(
     if let Some(value) = cli_args.value_of("network-load") {
         let network_load = value
             .parse::<u8>()
-            .map_err(|_| format!("Invalid integer: {}", value))?;
+            .map_err(|_| format!("Invalid integer: {}", value))?
+            .into();
         config.network_load = network_load;
     }
 

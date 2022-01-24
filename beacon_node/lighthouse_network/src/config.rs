@@ -10,6 +10,7 @@ use libp2p::gossipsub::{
 };
 use libp2p::Multiaddr;
 use serde_derive::{Deserialize, Serialize};
+use serde_repr::*;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -116,7 +117,7 @@ pub struct Config {
 
     /// A setting specifying a range of values that tune the network parameters of lighthouse. The
     /// lower the value the less bandwidth used, but the slower messages will be received.
-    pub network_load: u8,
+    pub network_load: NetworkLoad,
 
     /// Indicates if the user has set the network to be in private mode. Currently this
     /// prevents sending client identifying information over identify.
@@ -199,7 +200,7 @@ impl Default for Config {
             client_version: lighthouse_version::version_with_platform(),
             disable_discovery: false,
             upnp_enabled: true,
-            network_load: 3,
+            network_load: NetworkLoad::Average,
             private: false,
             subscribe_all_subnets: false,
             import_all_attestations: false,
@@ -210,8 +211,78 @@ impl Default for Config {
     }
 }
 
+#[derive(Serialize_repr, Deserialize_repr, PartialEq, Debug, Copy, Clone)]
+#[repr(u8)]
+pub enum NetworkLoad {
+    Lowest = 1,
+    Low = 2,
+    Average = 3,
+    Spec = 4,
+    High = 5,
+}
+
+impl From<u8> for NetworkLoad {
+    fn from(v: u8) -> Self {
+        match v {
+            1 => NetworkLoad::Lowest,
+            2 => NetworkLoad::Low,
+            3 => NetworkLoad::Average,
+            4 => NetworkLoad::Spec,
+            _ => NetworkLoad::High,
+        }
+    }
+}
+
+impl NetworkLoadParams {
+    pub const LOWEST: NetworkLoadParams = NetworkLoadParams {
+        name: "Low",
+        mesh_n_low: 1,
+        outbound_min: 1,
+        mesh_n: 3,
+        mesh_n_high: 4,
+        gossip_lazy: 3,
+        history_gossip: 12,
+    };
+    pub const LOW: NetworkLoadParams = NetworkLoadParams {
+        name: "Low",
+        mesh_n_low: 2,
+        outbound_min: 2,
+        mesh_n: 4,
+        mesh_n_high: 8,
+        gossip_lazy: 3,
+        history_gossip: 12,
+    };
+    pub const AVERAGE: NetworkLoadParams = NetworkLoadParams {
+        name: "Average",
+        mesh_n_low: 3,
+        outbound_min: 2,
+        mesh_n: 5,
+        mesh_n_high: 10,
+        gossip_lazy: 3,
+        history_gossip: 12,
+    };
+    pub const SPEC: NetworkLoadParams = NetworkLoadParams {
+        name: "Average",
+        mesh_n_low: 4,
+        outbound_min: 3,
+        mesh_n: 8,
+        mesh_n_high: 12,
+        gossip_lazy: 3,
+        history_gossip: 12,
+    };
+    pub const HIGH: NetworkLoadParams = NetworkLoadParams {
+        name: "High",
+        mesh_n_low: 5,
+        outbound_min: 3,
+        mesh_n: 10,
+        mesh_n_high: 15,
+        gossip_lazy: 5,
+        history_gossip: 12,
+    };
+}
+
 /// Controls sizes of gossipsub meshes to tune a Lighthouse node's bandwidth/performance.
-pub struct NetworkLoad {
+pub struct NetworkLoadParams {
     pub name: &'static str,
     pub mesh_n_low: usize,
     pub outbound_min: usize,
@@ -221,61 +292,23 @@ pub struct NetworkLoad {
     pub history_gossip: usize,
 }
 
-impl From<u8> for NetworkLoad {
-    fn from(load: u8) -> NetworkLoad {
-        match load {
-            1 => NetworkLoad {
-                name: "Low",
-                mesh_n_low: 1,
-                outbound_min: 1,
-                mesh_n: 3,
-                mesh_n_high: 4,
-                gossip_lazy: 3,
-                history_gossip: 12,
-            },
-            2 => NetworkLoad {
-                name: "Low",
-                mesh_n_low: 2,
-                outbound_min: 2,
-                mesh_n: 4,
-                mesh_n_high: 8,
-                gossip_lazy: 3,
-                history_gossip: 12,
-            },
-            3 => NetworkLoad {
-                name: "Average",
-                mesh_n_low: 3,
-                outbound_min: 2,
-                mesh_n: 5,
-                mesh_n_high: 10,
-                gossip_lazy: 3,
-                history_gossip: 12,
-            },
-            4 => NetworkLoad {
-                name: "Average",
-                mesh_n_low: 4,
-                outbound_min: 3,
-                mesh_n: 8,
-                mesh_n_high: 12,
-                gossip_lazy: 3,
-                history_gossip: 12,
-            },
-            // 5 and above
-            _ => NetworkLoad {
-                name: "High",
-                mesh_n_low: 5,
-                outbound_min: 3,
-                mesh_n: 10,
-                mesh_n_high: 15,
-                gossip_lazy: 5,
-                history_gossip: 12,
-            },
+impl NetworkLoad {
+    pub const fn params(&self) -> NetworkLoadParams {
+        match self {
+            NetworkLoad::Lowest => NetworkLoadParams::LOWEST,
+            NetworkLoad::Low => NetworkLoadParams::LOW,
+            NetworkLoad::Average => NetworkLoadParams::AVERAGE,
+            NetworkLoad::Spec => NetworkLoadParams::AVERAGE,
+            NetworkLoad::High => NetworkLoadParams::HIGH,
         }
     }
 }
 
 /// Return a Lighthouse specific `GossipsubConfig` where the `message_id_fn` depends on the current fork.
-pub fn gossipsub_config(network_load: u8, fork_context: Arc<ForkContext>) -> GossipsubConfig {
+pub fn gossipsub_config(
+    network_load: NetworkLoad,
+    fork_context: Arc<ForkContext>,
+) -> GossipsubConfig {
     // The function used to generate a gossipsub message id
     // We use the first 8 bytes of SHA256(data) for content addressing
     let fast_gossip_message_id =
@@ -318,7 +351,7 @@ pub fn gossipsub_config(network_load: u8, fork_context: Arc<ForkContext>) -> Gos
         )
     };
 
-    let load = NetworkLoad::from(network_load);
+    let load = network_load.params();
 
     GossipsubConfigBuilder::default()
         .max_transmit_size(gossip_max_size(is_merge_enabled))
