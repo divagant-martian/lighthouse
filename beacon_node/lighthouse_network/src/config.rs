@@ -200,7 +200,7 @@ impl Default for Config {
             client_version: lighthouse_version::version_with_platform(),
             disable_discovery: false,
             upnp_enabled: true,
-            network_load: NetworkLoad::Average,
+            network_load: NetworkLoad::Spec,
             private: false,
             subscribe_all_subnets: false,
             import_all_attestations: false,
@@ -216,9 +216,9 @@ impl Default for Config {
 pub enum NetworkLoad {
     Lowest = 1,
     Low = 2,
-    Average = 3,
-    Spec = 4,
-    High = 5,
+    Spec = 3,
+    High = 4,
+    Highest = 5,
 }
 
 impl From<u8> for NetworkLoad {
@@ -226,16 +226,16 @@ impl From<u8> for NetworkLoad {
         match v {
             1 => NetworkLoad::Lowest,
             2 => NetworkLoad::Low,
-            3 => NetworkLoad::Average,
-            4 => NetworkLoad::Spec,
-            _ => NetworkLoad::High,
+            3 => NetworkLoad::Spec,
+            4 => NetworkLoad::High,
+            _ => NetworkLoad::Highest,
         }
     }
 }
 
 impl NetworkLoadParams {
     pub const LOWEST: NetworkLoadParams = NetworkLoadParams {
-        name: "Low",
+        name: "Lowest",
         mesh_n_low: 1,
         outbound_min: 1,
         mesh_n: 3,
@@ -252,8 +252,8 @@ impl NetworkLoadParams {
         gossip_lazy: 3,
         history_gossip: 12,
     };
-    pub const AVERAGE: NetworkLoadParams = NetworkLoadParams {
-        name: "Average",
+    pub const SPEC: NetworkLoadParams = NetworkLoadParams {
+        name: "Spec",
         mesh_n_low: 3,
         outbound_min: 2,
         mesh_n: 5,
@@ -261,8 +261,8 @@ impl NetworkLoadParams {
         gossip_lazy: 3,
         history_gossip: 12,
     };
-    pub const SPEC: NetworkLoadParams = NetworkLoadParams {
-        name: "Average",
+    pub const HIGH: NetworkLoadParams = NetworkLoadParams {
+        name: "High",
         mesh_n_low: 4,
         outbound_min: 3,
         mesh_n: 8,
@@ -270,8 +270,8 @@ impl NetworkLoadParams {
         gossip_lazy: 3,
         history_gossip: 12,
     };
-    pub const HIGH: NetworkLoadParams = NetworkLoadParams {
-        name: "High",
+    pub const HIGHEST: NetworkLoadParams = NetworkLoadParams {
+        name: "Highest",
         mesh_n_low: 5,
         outbound_min: 3,
         mesh_n: 10,
@@ -297,9 +297,9 @@ impl NetworkLoad {
         match self {
             NetworkLoad::Lowest => NetworkLoadParams::LOWEST,
             NetworkLoad::Low => NetworkLoadParams::LOW,
-            NetworkLoad::Average => NetworkLoadParams::AVERAGE,
-            NetworkLoad::Spec => NetworkLoadParams::AVERAGE,
+            NetworkLoad::Spec => NetworkLoadParams::SPEC,
             NetworkLoad::High => NetworkLoadParams::HIGH,
+            NetworkLoad::Highest => NetworkLoadParams::HIGHEST,
         }
     }
 }
@@ -351,20 +351,28 @@ pub fn gossipsub_config(
         )
     };
 
-    let load = network_load.params();
+    let NetworkLoadParams {
+        name: _,
+        mesh_n_low,
+        outbound_min,
+        mesh_n,
+        mesh_n_high,
+        gossip_lazy,
+        history_gossip,
+    } = network_load.params();
 
     GossipsubConfigBuilder::default()
         .max_transmit_size(gossip_max_size(is_merge_enabled))
         .heartbeat_interval(Duration::from_millis(700))
-        .mesh_n(load.mesh_n)
-        .mesh_n_low(load.mesh_n_low)
-        .mesh_outbound_min(load.outbound_min)
-        .mesh_n_high(load.mesh_n_high)
-        .gossip_lazy(load.gossip_lazy)
+        .mesh_n(mesh_n)
+        .mesh_n_low(mesh_n_low)
+        .mesh_outbound_min(outbound_min)
+        .mesh_n_high(mesh_n_high)
+        .gossip_lazy(gossip_lazy)
         .fanout_ttl(Duration::from_secs(60))
         .history_length(12)
         .max_messages_per_rpc(Some(500)) // Responses to IWANT can be quite large
-        .history_gossip(load.history_gossip)
+        .history_gossip(history_gossip)
         .validate_messages() // require validation before propagation
         .validation_mode(ValidationMode::Anonymous)
         .duplicate_cache_time(DUPLICATE_CACHE_TIME)
