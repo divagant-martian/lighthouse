@@ -241,7 +241,8 @@ impl NetworkLoadParams {
         mesh_n: 3,
         mesh_n_high: 4,
         gossip_lazy: 3,
-        history_gossip: 12,
+        history_gossip: 3,
+        heartbeat_interval: Duration::from_secs(1200),
     };
     pub const LOW: NetworkLoadParams = NetworkLoadParams {
         name: "Low",
@@ -250,7 +251,8 @@ impl NetworkLoadParams {
         mesh_n: 4,
         mesh_n_high: 8,
         gossip_lazy: 3,
-        history_gossip: 12,
+        history_gossip: 3,
+        heartbeat_interval: Duration::from_secs(1000),
     };
     pub const SPEC: NetworkLoadParams = NetworkLoadParams {
         name: "Spec",
@@ -259,7 +261,8 @@ impl NetworkLoadParams {
         mesh_n: 5,
         mesh_n_high: 10,
         gossip_lazy: 3,
-        history_gossip: 12,
+        history_gossip: 3,
+        heartbeat_interval: Duration::from_secs(700),
     };
     pub const HIGH: NetworkLoadParams = NetworkLoadParams {
         name: "High",
@@ -268,7 +271,8 @@ impl NetworkLoadParams {
         mesh_n: 8,
         mesh_n_high: 12,
         gossip_lazy: 3,
-        history_gossip: 12,
+        history_gossip: 3,
+        heartbeat_interval: Duration::from_secs(500),
     };
     pub const HIGHEST: NetworkLoadParams = NetworkLoadParams {
         name: "Highest",
@@ -277,7 +281,8 @@ impl NetworkLoadParams {
         mesh_n: 10,
         mesh_n_high: 15,
         gossip_lazy: 5,
-        history_gossip: 12,
+        history_gossip: 6,
+        heartbeat_interval: Duration::from_secs(500),
     };
 }
 
@@ -290,6 +295,7 @@ pub struct NetworkLoadParams {
     pub mesh_n_high: usize,
     pub gossip_lazy: usize,
     pub history_gossip: usize,
+    pub heartbeat_interval: Duration,
 }
 
 impl NetworkLoad {
@@ -359,11 +365,12 @@ pub fn gossipsub_config(
         mesh_n_high,
         gossip_lazy,
         history_gossip,
+        heartbeat_interval,
     } = network_load.params();
 
     GossipsubConfigBuilder::default()
         .max_transmit_size(gossip_max_size(is_merge_enabled))
-        .heartbeat_interval(Duration::from_millis(700))
+        .heartbeat_interval(heartbeat_interval)
         .mesh_n(mesh_n)
         .mesh_n_low(mesh_n_low)
         .mesh_outbound_min(outbound_min)
