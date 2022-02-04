@@ -1857,7 +1857,7 @@ impl<T: BeaconChainTypes> Worker<T> {
                 };
 
                 // Penalize the peer if the message was more than one slot late
-                if STRICT_LATE_MESSAGE_PENALTIES && excessively_late && invalid_in_hindsight() {
+                if excessively_late && invalid_in_hindsight() {
                     let start_of = self
                         .chain
                         .slot_clock
