@@ -1277,6 +1277,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         error: AttnError,
         seen_timestamp: Duration,
     ) {
+        let id = message_id.clone();
         let beacon_block_root = failed_att.beacon_block_root();
         let attestation_type = failed_att.kind();
         metrics::register_attestation_error(&error);
@@ -1774,8 +1775,9 @@ impl<T: BeaconChainTypes> Worker<T> {
             self.log,
             "Invalid attestation from network";
             "reason" => ?error,
-            "block" => ?beacon_block_root,
             "peer_id" => %peer_id,
+            "msg_id" => %id,
+            "block" => ?beacon_block_root,
             "type" => ?attestation_type,
         );
     }
@@ -1792,6 +1794,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         seen_timestamp: Duration,
     ) {
         metrics::register_sync_committee_error(&error);
+        let id = message_id.clone();
 
         match &error {
             SyncCommitteeError::FutureSlot { .. } => {
@@ -2136,6 +2139,7 @@ impl<T: BeaconChainTypes> Worker<T> {
             "Invalid sync committee message from network";
             "reason" => ?error,
             "peer_id" => %peer_id,
+            "msg_id" => %id,
             "type" => ?message_type,
         );
     }
