@@ -1319,7 +1319,24 @@ impl<T: BeaconChainTypes> Worker<T> {
 
                 // Only penalize the peer if it would have been invalid at the moment we received
                 // it.
-                if STRICT_LATE_MESSAGE_PENALTIES && hindsight_verification.is_err() {
+                if hindsight_verification.is_err() {
+                    let start_of = self
+                        .chain
+                        .slot_clock
+                        .start_of(failed_att.attestation().data.slot)
+                        .unwrap();
+                    let current_slot = self.chain.slot_clock.slot_of(seen_timestamp).unwrap();
+                    let delay = seen_timestamp.saturating_sub(start_of);
+                    crit!(
+                        self.log,
+                        "Attestation past slot fail";
+                        "peer_id" => %peer_id,
+                        "message_id" => ?message_id,
+                        "seen_timestamp" => seen_timestamp.as_secs(),
+                        "slot" => failed_att.attestation().data.slot,
+                        "current_slot" => current_slot,
+                        "delay" => delay.as_secs(),
+                    );
                     self.gossip_penalize_peer(
                         peer_id,
                         PeerAction::LowToleranceError,
@@ -1841,6 +1858,24 @@ impl<T: BeaconChainTypes> Worker<T> {
 
                 // Penalize the peer if the message was more than one slot late
                 if STRICT_LATE_MESSAGE_PENALTIES && excessively_late && invalid_in_hindsight() {
+                    let start_of = self
+                        .chain
+                        .slot_clock
+                        .start_of(sync_committee_message_slot)
+                        .unwrap();
+                    let current_slot = self.chain.slot_clock.slot_of(seen_timestamp).unwrap();
+                    let delay = seen_timestamp.saturating_sub(start_of);
+                    info!(
+                        self.log,
+                        "Sync committee past slot fail";
+                        "peer_id" => %peer_id,
+                        "type" => ?message_type,
+                        "message_id" => ?message_id,
+                        "seen_timestamp" => seen_timestamp.as_secs(),
+                        "slot" => %sync_committee_message_slot,
+                        "current_slot" => %current_slot,
+                        "delay" => %delay.as_secs(),
+                    );
                     self.gossip_penalize_peer(
                         peer_id,
                         PeerAction::HighToleranceError,
