@@ -42,7 +42,7 @@ open-metrics-client = "0.14.0"
 
 [dependencies.libp2p]
 git = "https://github.com/sigp/rust-libp2p"
-rev = "e23b671b967a5b80d533aba07c04b748260f77b8"
+rev = "4b3361a68182e0445596e5f0076d477e5bdb083b"
 default-features = false
 features = ["websocket", "identify", "mplex", "yamux", "noise", "gossipsub", "dns-tokio", "tcp-tokio", "plaintext", "secp256k1"]
 
