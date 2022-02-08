@@ -276,9 +276,9 @@ impl<TSpec: EthSpec> Behaviour<TSpec> {
         // Set up a scoring update interval
         let update_gossipsub_scores = tokio::time::interval(params.decay_interval);
 
-        gossipsub
-            .with_peer_score(params, thresholds)
-            .expect("Valid score params and thresholds");
+        // gossipsub
+            // .with_peer_score(params, thresholds)
+            // .expect("Valid score params and thresholds");
 
         let peer_manager_cfg = PeerManagerCfg {
             discovery_enabled: !config.disable_discovery,
