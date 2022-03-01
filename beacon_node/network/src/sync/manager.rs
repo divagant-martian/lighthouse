@@ -1134,6 +1134,15 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                     }
                 }
             }
+            crate::metrics::set_gauge(
+                &crate::metrics::SYNC_SINGLE_BLOCK_LOOKUPS,
+                self.single_block_lookups.len(),
+            );
+
+            crate::metrics::set_gauge(
+                &crate::metrics::SYNC_PARENT_BLOCK_LOOKUPS,
+                self.parent_queue.len(),
+            );
         }
     }
 }
