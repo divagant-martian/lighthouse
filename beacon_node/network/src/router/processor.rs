@@ -130,7 +130,7 @@ impl<T: BeaconChainTypes> Processor<T> {
         request_id: PeerRequestId,
         status: StatusMessage,
     ) {
-        trace!(self.log, "Received Status Request"; "peer_id" => %peer_id, &status);
+        debug!(self.log, "Received Status Request"; "peer_id" => %peer_id, &status);
 
         // ignore status responses if we are shutting down
         if let Ok(status_message) = status_message(&self.chain) {
@@ -144,7 +144,7 @@ impl<T: BeaconChainTypes> Processor<T> {
 
     /// Process a `Status` response from a peer.
     pub fn on_status_response(&mut self, peer_id: PeerId, status: StatusMessage) {
-        trace!(self.log, "Received Status Response"; "peer_id" => %peer_id, &status);
+        debug!(self.log, "Received Status Response"; "peer_id" => %peer_id, &status);
         self.send_beacon_processor_work(BeaconWorkEvent::status_message(peer_id, status))
     }
 
