@@ -523,26 +523,23 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
                         batch.state(),
                     ))
                 })?;
-                debug!(self.log, "Batch processing failed"; "imported_blocks" => imported_blocks,
+                debug!(self.log, "Batch processing failed"; "imported_blocks" => imported_blocks, "peer_penalty" => ?peer_action,
                     "batch_epoch" => batch_id, "peer" => %peer, "client" => %network.client_type(&peer));
 
                 // The batch failed because the execution layer went offline.
                 // Set the execution_state to offline
-                let stall_execution = if let FailureMode::ExecutionLayer { pause_sync } = mode {
+                let count_attempt = if let FailureMode::ExecutionLayer { pause_sync } = mode {
                     if *pause_sync {
                         debug!(self.log, "Execution layer offline"; "action" => "chain syncing stopped");
                         self.execution_status_handler.offline();
                         self.state = ChainSyncingState::Stopped;
                     }
-                    *pause_sync
+                    !*pause_sync
                 } else {
-                    false
+                    peer_action.is_some()
                 };
 
-                if batch.processing_completed(BatchProcessingResult::Failed {
-                    // do not count attempt if the error was due to execution layer being offline
-                    count_attempt: !stall_execution,
-                })? {
+                if batch.processing_completed(BatchProcessingResult::Failed { count_attempt })? {
                     // check that we have not exceeded the re-process retry counter
                     // If a batch has exceeded the invalid batch lookup attempts limit, it means
                     // that it is likely all peers in this chain are are sending invalid batches

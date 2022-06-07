@@ -667,7 +667,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                 debug!(self.log, "Batch processing failed"; "imported_blocks" => imported_blocks,
                     "batch_epoch" => batch_id, "peer" => %peer, "client" => %network.client_type(&peer));
                 match batch.processing_completed(BatchProcessingResult::Failed {
-                    count_attempt: true,
+                    count_attempt: peer_action.is_some(),
                 }) {
                     Err(e) => {
                         // Batch was in the wrong state
