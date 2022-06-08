@@ -583,6 +583,26 @@ impl<T: BeaconChainTypes> SyncManager<T> {
         }
     }
 
+    /// If the different sync parts are paused, this kicks off processing again.
+    fn advance_sync(&mut self) {
+        let local = match self.chain.status_message() {
+            Ok(status) => SyncInfo {
+                head_slot: status.head_slot,
+                head_root: status.head_root,
+                finalized_epoch: status.finalized_epoch,
+                finalized_root: status.finalized_root,
+            },
+            Err(e) => {
+                return error!(self.log, "Failed to get peer sync info";
+                    "msg" => "likely due to head lock contention", "err" => ?e)
+            }
+        };
+
+        // Get range sync moving
+        self.range_sync.update(&mut self.network, local);
+        // Update the sync state accordingly. This will resume backfill syncing if required.
+        self.update_sync_state();
+    }
     /// The main driving future for the sync manager.
     async fn main(&mut self) {
         loop {
@@ -607,7 +627,7 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                     self.execution_status_handler.online();
                     // Reset the notifier
                     self.execution_notifier = Box::pin(None.into());
-                    self.update_sync_state();
+                    self.advance_sync();
                 }
                 // process any inbound messages
                 Some(sync_message) = self.input_channel.recv() => {
