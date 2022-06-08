@@ -105,6 +105,16 @@ where
         }
     }
 
+    /// Updates range with the local info. This starts syncing chains if required.
+    pub fn update(&mut self, network: &mut SyncNetworkContext<T::EthSpec>, local_info: SyncInfo) {
+        self.chains.update(
+            network,
+            &local_info,
+            &mut self.awaiting_head_peers,
+            &self.beacon_processor_send,
+        )
+    }
+
     pub fn state(&self) -> Result<ChainState, &'static str> {
         self.chains.state()
     }

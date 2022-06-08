@@ -290,8 +290,13 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
         network: &mut SyncNetworkContext<T::EthSpec>,
         batch_id: BatchId,
     ) -> ProcessingResult {
-        // Only process batches if this chain is Syncing, and only one at a time
-        if self.state != ChainSyncingState::Syncing || self.current_processing_batch.is_some() {
+        // Only process batches if this chain is Syncing, and only one at a time.
+        // We also prevent sending batches to the beacon processor if the ExecutionState indicates
+        // to be offline.
+        if self.state != ChainSyncingState::Syncing
+            || self.current_processing_batch.is_some()
+            || self.execution_status_handler.status() == Some(ExecutionState::Offline)
+        {
             return Ok(KeepChain);
         }
 
@@ -343,7 +348,10 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
         network: &mut SyncNetworkContext<T::EthSpec>,
     ) -> ProcessingResult {
         // Only process batches if this chain is Syncing and only process one batch at a time
-        if self.state != ChainSyncingState::Syncing || self.current_processing_batch.is_some() {
+        if self.state != ChainSyncingState::Syncing
+            || self.current_processing_batch.is_some()
+            || self.execution_status_handler.status() == Some(ExecutionState::Offline)
+        {
             return Ok(KeepChain);
         }
 
@@ -532,7 +540,6 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
                     if *pause_sync {
                         debug!(self.log, "Execution layer offline"; "action" => "chain syncing stopped");
                         self.execution_status_handler.offline();
-                        self.state = ChainSyncingState::Stopped;
                     }
                     !*pause_sync
                 } else {
@@ -779,9 +786,6 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
         local_finalized_epoch: Epoch,
         optimistic_start_epoch: Epoch,
     ) -> ProcessingResult {
-        if let Some(ExecutionState::Offline) = self.execution_status_handler.status() {
-            return Ok(KeepChain);
-        }
         // to avoid dropping local progress, we advance the chain wrt its batch boundaries. This
         let align = |epoch| {
             // start_epoch + (number of batches in between)*length_of_batch
