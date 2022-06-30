@@ -11,6 +11,7 @@ use eth2::{
     types::*,
     BeaconNodeHttpClient, Error, StatusCode, Timeouts,
 };
+use execution_layer::test_utils::MockExecutionLayer;
 use futures::stream::{Stream, StreamExt};
 use futures::FutureExt;
 use lighthouse_network::{Enr, EnrExt, PeerId};
@@ -20,9 +21,11 @@ use slot_clock::SlotClock;
 use state_processing::per_slot_processing;
 use std::convert::TryInto;
 use std::sync::Arc;
+use task_executor::test_utils::TestRuntime;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Duration;
 use tree_hash::TreeHash;
+use types::application_domain::ApplicationDomain;
 use types::{
     AggregateSignature, BeaconState, BitList, Domain, EthSpec, Hash256, Keypair, MainnetEthSpec,
     RelativeEpoch, SelectionProof, SignedRoot, Slot,
@@ -63,6 +66,10 @@ struct ApiTester {
     network_rx: mpsc::UnboundedReceiver<NetworkMessage<E>>,
     local_enr: Enr,
     external_peer_id: PeerId,
+    // This is never directly accessed, but adding it creates a payload cache, which we use in tests here.
+    #[allow(dead_code)]
+    mock_el: Option<MockExecutionLayer<E>>,
+    _runtime: TestRuntime,
 }
 
 impl ApiTester {
@@ -78,6 +85,7 @@ impl ApiTester {
             .spec(spec.clone())
             .deterministic_keypairs(VALIDATOR_COUNT)
             .fresh_ephemeral_store()
+            .mock_execution_layer()
             .build();
 
         harness.advance_slot();
@@ -121,8 +129,7 @@ impl ApiTester {
                 harness.chain.slot().unwrap(),
             )
             .into_iter()
-            .map(|vec| vec.into_iter().map(|(attestation, _subnet_id)| attestation))
-            .flatten()
+            .flat_map(|vec| vec.into_iter().map(|(attestation, _subnet_id)| attestation))
             .collect::<Vec<_>>();
 
         assert!(
@@ -186,7 +193,7 @@ impl ApiTester {
             external_peer_id,
         } = create_api_server(chain.clone(), log).await;
 
-        tokio::spawn(server);
+        harness.runtime.task_executor.spawn(server, "api_server");
 
         let client = BeaconNodeHttpClient::new(
             SensitiveUrl::parse(&format!(
@@ -213,6 +220,8 @@ impl ApiTester {
             network_rx,
             local_enr,
             external_peer_id,
+            mock_el: harness.mock_execution_layer,
+            _runtime: harness.runtime,
         }
     }
 
@@ -244,8 +253,7 @@ impl ApiTester {
                 harness.chain.slot().unwrap(),
             )
             .into_iter()
-            .map(|vec| vec.into_iter().map(|(attestation, _subnet_id)| attestation))
-            .flatten()
+            .flat_map(|vec| vec.into_iter().map(|(attestation, _subnet_id)| attestation))
             .collect::<Vec<_>>();
 
         let attester_slashing = harness.make_attester_slashing(vec![0, 1]);
@@ -265,7 +273,7 @@ impl ApiTester {
             external_peer_id,
         } = create_api_server(chain.clone(), log).await;
 
-        tokio::spawn(server);
+        harness.runtime.task_executor.spawn(server, "api_server");
 
         let client = BeaconNodeHttpClient::new(
             SensitiveUrl::parse(&format!(
@@ -292,6 +300,8 @@ impl ApiTester {
             network_rx,
             local_enr,
             external_peer_id,
+            mock_el: None,
+            _runtime: harness.runtime,
         }
     }
 
@@ -762,9 +772,9 @@ impl ApiTester {
         }
     }
 
-    fn get_block(&self, block_id: BlockId) -> Option<SignedBeaconBlock<E>> {
-        let root = self.get_block_root(block_id);
-        root.and_then(|root| self.chain.get_block(&root).unwrap())
+    async fn get_block(&self, block_id: BlockId) -> Option<SignedBeaconBlock<E>> {
+        let root = self.get_block_root(block_id)?;
+        self.chain.get_block(&root).await.unwrap()
     }
 
     pub async fn test_beacon_headers_all_slots(self) -> Self {
@@ -859,7 +869,11 @@ impl ApiTester {
                 }
             }
 
-            let block_opt = block_root_opt.and_then(|root| self.chain.get_block(&root).unwrap());
+            let block_opt = if let Some(root) = block_root_opt {
+                self.chain.get_block(&root).await.unwrap()
+            } else {
+                None
+            };
 
             if block_opt.is_none() && result.is_none() {
                 continue;
@@ -945,7 +959,7 @@ impl ApiTester {
 
     pub async fn test_beacon_blocks(self) -> Self {
         for block_id in self.interesting_block_ids() {
-            let expected = self.get_block(block_id);
+            let expected = self.get_block(block_id).await;
 
             if let BlockId::Slot(slot) = block_id {
                 if expected.is_none() {
@@ -1030,6 +1044,7 @@ impl ApiTester {
 
             let expected = self
                 .get_block(block_id)
+                .await
                 .map(|block| block.message().body().attestations().clone().into());
 
             if let BlockId::Slot(slot) = block_id {
@@ -2219,6 +2234,66 @@ impl ApiTester {
         self
     }
 
+    pub async fn test_post_validator_register_validator(self) -> Self {
+        let mut registrations = vec![];
+        let mut fee_recipients = vec![];
+
+        let fork = self.chain.head().unwrap().beacon_state.fork();
+
+        for (val_index, keypair) in self.validator_keypairs.iter().enumerate() {
+            let pubkey = keypair.pk.compress();
+            let fee_recipient = Address::from_low_u64_be(val_index as u64);
+
+            let data = ValidatorRegistrationData {
+                fee_recipient,
+                gas_limit: 0,
+                timestamp: 0,
+                pubkey,
+            };
+            let domain = self.chain.spec.get_domain(
+                Epoch::new(0),
+                Domain::ApplicationMask(ApplicationDomain::Builder),
+                &fork,
+                Hash256::zero(),
+            );
+            let message = data.signing_root(domain);
+            let signature = keypair.sk.sign(message);
+
+            fee_recipients.push(fee_recipient);
+            registrations.push(SignedValidatorRegistrationData {
+                message: data,
+                signature,
+            });
+        }
+
+        self.client
+            .post_validator_register_validator(&registrations)
+            .await
+            .unwrap();
+
+        for (val_index, (_, fee_recipient)) in self
+            .chain
+            .head()
+            .unwrap()
+            .beacon_state
+            .validators()
+            .into_iter()
+            .zip(fee_recipients.into_iter())
+            .enumerate()
+        {
+            let actual = self
+                .chain
+                .execution_layer
+                .as_ref()
+                .unwrap()
+                .get_suggested_fee_recipient(val_index as u64)
+                .await;
+            assert_eq!(actual, fee_recipient);
+        }
+
+        self
+    }
+
     #[cfg(target_os = "linux")]
     pub async fn test_get_lighthouse_health(self) -> Self {
         self.client.get_lighthouse_health().await.unwrap();
@@ -2385,8 +2460,7 @@ impl ApiTester {
             .unwrap();
         let attesting_validators: Vec<usize> = committees
             .into_iter()
-            .map(|committee| committee.committee.iter().cloned())
-            .flatten()
+            .flat_map(|committee| committee.committee.iter().cloned())
             .collect();
         // All attesters should now be considered live
         let expected = expected
@@ -2964,6 +3038,14 @@ async fn get_validator_beacon_committee_subscriptions() {
     ApiTester::new()
         .await
         .test_get_validator_beacon_committee_subscriptions()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_validator_register_validator() {
+    ApiTester::new()
+        .await
+        .test_post_validator_register_validator()
         .await;
 }
 

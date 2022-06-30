@@ -3,8 +3,8 @@ use itertools::process_results;
 use std::cmp;
 use std::time::Duration;
 use types::{
-    beacon_state::CloneConfig, BeaconState, ChainSpec, Epoch, EthSpec, Hash256, SignedBeaconBlock,
-    Slot,
+    beacon_state::CloneConfig, BeaconState, BlindedPayload, ChainSpec, Epoch, EthSpec, Hash256,
+    SignedBeaconBlock, Slot,
 };
 
 /// The default size of the cache.
@@ -23,7 +23,7 @@ pub struct PreProcessingSnapshot<T: EthSpec> {
     pub pre_state: BeaconState<T>,
     /// This value is only set to `Some` if the `pre_state` was *not* advanced forward.
     pub beacon_state_root: Option<Hash256>,
-    pub beacon_block: SignedBeaconBlock<T>,
+    pub beacon_block: SignedBeaconBlock<T, BlindedPayload<T>>,
     pub beacon_block_root: Hash256,
 }
 
@@ -33,7 +33,7 @@ impl<T: EthSpec> From<BeaconSnapshot<T>> for PreProcessingSnapshot<T> {
         Self {
             pre_state: snapshot.beacon_state,
             beacon_state_root,
-            beacon_block: snapshot.beacon_block,
+            beacon_block: snapshot.beacon_block.into(),
             beacon_block_root: snapshot.beacon_block_root,
         }
     }
@@ -63,7 +63,7 @@ impl<T: EthSpec> CacheItem<T> {
             Some(self.beacon_block.state_root()).filter(|_| self.pre_state.is_none());
 
         PreProcessingSnapshot {
-            beacon_block: self.beacon_block,
+            beacon_block: self.beacon_block.into(),
             beacon_block_root: self.beacon_block_root,
             pre_state: self.pre_state.unwrap_or(self.beacon_state),
             beacon_state_root,
@@ -76,7 +76,7 @@ impl<T: EthSpec> CacheItem<T> {
             Some(self.beacon_block.state_root()).filter(|_| self.pre_state.is_none());
 
         PreProcessingSnapshot {
-            beacon_block: self.beacon_block.clone(),
+            beacon_block: self.beacon_block.clone().into(),
             beacon_block_root: self.beacon_block_root,
             pre_state: self
                 .pre_state
@@ -253,12 +253,11 @@ impl<T: EthSpec> SnapshotCache<T> {
             .position(|snapshot| snapshot.beacon_block_root == block_root)
             .map(|i| {
                 if let Some(cache) = self.snapshots.get(i) {
-                    if block_slot > cache.beacon_block.slot() + 1 {
-                        return (cache.clone_as_pre_state(), true);
-                    }
+                    // Avoid cloning the block during sync (when the `block_delay` is `None`).
                     if let Some(delay) = block_delay {
                         if delay >= MINIMUM_BLOCK_DELAY_FOR_CLONE
                             && delay <= Duration::from_secs(spec.seconds_per_slot) * 4
+                            || block_slot > cache.beacon_block.slot() + 1
                         {
                             return (cache.clone_as_pre_state(), true);
                         }

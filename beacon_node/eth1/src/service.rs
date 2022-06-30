@@ -2,11 +2,12 @@ use crate::metrics;
 use crate::{
     block_cache::{BlockCache, Error as BlockCacheError, Eth1Block},
     deposit_cache::{DepositCacheInsertOutcome, Error as DepositCacheError},
-    http::{
-        get_block, get_block_number, get_chain_id, get_deposit_logs_in_range, get_network_id,
-        BlockQuery, Eth1Id,
-    },
     inner::{DepositUpdater, Inner},
+};
+use execution_layer::auth::Auth;
+use execution_layer::http::{
+    deposit_methods::{BlockQuery, Eth1Id},
+    HttpJsonRpc,
 };
 use fallback::{Fallback, FallbackError};
 use futures::future::TryFutureExt;
@@ -17,14 +18,13 @@ use slog::{crit, debug, error, info, trace, warn, Logger};
 use std::fmt::Debug;
 use std::future::Future;
 use std::ops::{Range, RangeInclusive};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock as TRwLock;
 use tokio::time::{interval_at, Duration, Instant};
 use types::{ChainSpec, EthSpec, Unsigned};
 
-/// Indicates the default eth1 network id we use for the deposit contract.
-pub const DEFAULT_NETWORK_ID: Eth1Id = Eth1Id::Goerli;
 /// Indicates the default eth1 chain id we use for the deposit contract.
 pub const DEFAULT_CHAIN_ID: Eth1Id = Eth1Id::Goerli;
 /// Indicates the default eth1 endpoint.
@@ -41,8 +41,16 @@ const GET_DEPOSIT_LOG_TIMEOUT_MILLIS: u64 = 60_000;
 
 const WARNING_MSG: &str = "BLOCK PROPOSALS WILL FAIL WITHOUT VALID, SYNCED ETH1 CONNECTION";
 
-/// A factor used to reduce the eth1 follow distance to account for discrepancies in the block time.
-const ETH1_BLOCK_TIME_TOLERANCE_FACTOR: u64 = 4;
+/// Number of blocks to download if the node detects it is lagging behind due to an inaccurate
+/// relationship between block-number-based follow distance and time-based follow distance.
+const CATCHUP_BATCH_SIZE: u64 = 128;
+
+/// The absolute minimum follow distance to enforce when downloading catchup batches.
+const CATCHUP_MIN_FOLLOW_DISTANCE: u64 = 64;
+
+/// To account for fast PoW blocks requiring more blocks in the cache than the block-based follow
+/// distance would imply, we store `CACHE_FACTOR` more blocks in our cache.
+const CACHE_FACTOR: u64 = 2;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum EndpointError {
@@ -55,14 +63,14 @@ pub enum EndpointError {
 type EndpointState = Result<(), EndpointError>;
 
 pub struct EndpointWithState {
-    endpoint: SensitiveUrl,
+    client: HttpJsonRpc,
     state: TRwLock<Option<EndpointState>>,
 }
 
 impl EndpointWithState {
-    pub fn new(endpoint: SensitiveUrl) -> Self {
+    pub fn new(client: HttpJsonRpc) -> Self {
         Self {
-            endpoint,
+            client,
             state: TRwLock::new(None),
         }
     }
@@ -81,7 +89,6 @@ async fn get_state(endpoint: &EndpointWithState) -> Option<EndpointState> {
 /// is not usable.
 pub struct EndpointsCache {
     pub fallback: Fallback<EndpointWithState>,
-    pub config_network_id: Eth1Id,
     pub config_chain_id: Eth1Id,
     pub log: Logger,
 }
@@ -99,20 +106,14 @@ impl EndpointsCache {
         }
         crate::metrics::inc_counter_vec(
             &crate::metrics::ENDPOINT_REQUESTS,
-            &[&endpoint.endpoint.to_string()],
+            &[&endpoint.client.to_string()],
         );
-        let state = endpoint_state(
-            &endpoint.endpoint,
-            &self.config_network_id,
-            &self.config_chain_id,
-            &self.log,
-        )
-        .await;
+        let state = endpoint_state(&endpoint.client, &self.config_chain_id, &self.log).await;
         *value = Some(state.clone());
         if state.is_err() {
             crate::metrics::inc_counter_vec(
                 &crate::metrics::ENDPOINT_ERRORS,
-                &[&endpoint.endpoint.to_string()],
+                &[&endpoint.client.to_string()],
             );
             crate::metrics::set_gauge(&metrics::ETH1_CONNECTED, 0);
         } else {
@@ -128,7 +129,7 @@ impl EndpointsCache {
         func: F,
     ) -> Result<(O, usize), FallbackError<SingleEndpointError>>
     where
-        F: Fn(&'a SensitiveUrl) -> R,
+        F: Fn(&'a HttpJsonRpc) -> R,
         R: Future<Output = Result<O, SingleEndpointError>>,
     {
         let func = &func;
@@ -136,12 +137,12 @@ impl EndpointsCache {
             .first_success(|endpoint| async move {
                 match self.state(endpoint).await {
                     Ok(()) => {
-                        let endpoint_str = &endpoint.endpoint.to_string();
+                        let endpoint_str = &endpoint.client.to_string();
                         crate::metrics::inc_counter_vec(
                             &crate::metrics::ENDPOINT_REQUESTS,
                             &[endpoint_str],
                         );
-                        match func(&endpoint.endpoint).await {
+                        match func(&endpoint.client).await {
                             Ok(t) => Ok(t),
                             Err(t) => {
                                 crate::metrics::inc_counter_vec(
@@ -178,8 +179,7 @@ impl EndpointsCache {
 /// Returns `Ok` if the endpoint is usable, i.e. is reachable and has a correct network id and
 /// chain id. Otherwise it returns `Err`.
 async fn endpoint_state(
-    endpoint: &SensitiveUrl,
-    config_network_id: &Eth1Id,
+    endpoint: &HttpJsonRpc,
     config_chain_id: &Eth1Id,
     log: &Logger,
 ) -> EndpointState {
@@ -192,21 +192,9 @@ async fn endpoint_state(
         );
         EndpointError::RequestFailed(e)
     };
-    let network_id = get_network_id(endpoint, Duration::from_millis(STANDARD_TIMEOUT_MILLIS))
-        .await
-        .map_err(error_connecting)?;
-    if &network_id != config_network_id {
-        warn!(
-            log,
-            "Invalid eth1 network id on endpoint. Please switch to correct network id";
-            "endpoint" => %endpoint,
-            "action" => "trying fallbacks",
-            "expected" => format!("{:?}",config_network_id),
-            "received" => format!("{:?}",network_id),
-        );
-        return Err(EndpointError::WrongNetworkId);
-    }
-    let chain_id = get_chain_id(endpoint, Duration::from_millis(STANDARD_TIMEOUT_MILLIS))
+
+    let chain_id = endpoint
+        .get_chain_id(Duration::from_millis(STANDARD_TIMEOUT_MILLIS))
         .await
         .map_err(error_connecting)?;
     // Eth1 nodes return chain_id = 0 if the node is not synced
@@ -245,7 +233,7 @@ pub enum HeadType {
 /// Returns the head block and the new block ranges relevant for deposits and the block cache
 /// from the given endpoint.
 async fn get_remote_head_and_new_block_ranges(
-    endpoint: &SensitiveUrl,
+    endpoint: &HttpJsonRpc,
     service: &Service,
     node_far_behind_seconds: u64,
 ) -> Result<
@@ -284,10 +272,18 @@ async fn get_remote_head_and_new_block_ranges(
         e
     };
     let new_deposit_block_numbers = service
-        .relevant_new_block_numbers(remote_head_block.number, HeadType::Deposit)
+        .relevant_new_block_numbers(
+            remote_head_block.number,
+            Some(remote_head_block.timestamp),
+            HeadType::Deposit,
+        )
         .map_err(handle_remote_not_synced)?;
     let new_block_cache_numbers = service
-        .relevant_new_block_numbers(remote_head_block.number, HeadType::BlockCache)
+        .relevant_new_block_numbers(
+            remote_head_block.number,
+            Some(remote_head_block.timestamp),
+            HeadType::BlockCache,
+        )
         .map_err(handle_remote_not_synced)?;
     Ok((
         remote_head_block,
@@ -299,15 +295,15 @@ async fn get_remote_head_and_new_block_ranges(
 /// Returns the range of new block numbers to be considered for the given head type from the given
 /// endpoint.
 async fn relevant_new_block_numbers_from_endpoint(
-    endpoint: &SensitiveUrl,
+    endpoint: &HttpJsonRpc,
     service: &Service,
     head_type: HeadType,
 ) -> Result<Option<RangeInclusive<u64>>, SingleEndpointError> {
-    let remote_highest_block =
-        get_block_number(endpoint, Duration::from_millis(BLOCK_NUMBER_TIMEOUT_MILLIS))
-            .map_err(SingleEndpointError::GetBlockNumberFailed)
-            .await?;
-    service.relevant_new_block_numbers(remote_highest_block, head_type)
+    let remote_highest_block = endpoint
+        .get_block_number(Duration::from_millis(BLOCK_NUMBER_TIMEOUT_MILLIS))
+        .map_err(SingleEndpointError::GetBlockNumberFailed)
+        .await?;
+    service.relevant_new_block_numbers(remote_highest_block, None, head_type)
 }
 
 #[derive(Debug, PartialEq)]
@@ -319,7 +315,7 @@ pub enum SingleEndpointError {
     RemoteNotSynced {
         next_required_block: u64,
         remote_highest_block: u64,
-        reduced_follow_distance: u64,
+        cache_follow_distance: u64,
     },
     /// Failed to download a block from the eth1 node.
     BlockDownloadFailed(String),
@@ -363,14 +359,41 @@ pub struct DepositCacheUpdateOutcome {
     pub logs_imported: usize,
 }
 
+/// Supports either one authenticated jwt JSON-RPC endpoint **or**
+/// multiple non-authenticated endpoints with fallback.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Eth1Endpoint {
+    Auth {
+        endpoint: SensitiveUrl,
+        jwt_path: PathBuf,
+        jwt_id: Option<String>,
+        jwt_version: Option<String>,
+    },
+    NoAuth(Vec<SensitiveUrl>),
+}
+
+impl Eth1Endpoint {
+    fn len(&self) -> usize {
+        match &self {
+            Self::Auth { .. } => 1,
+            Self::NoAuth(urls) => urls.len(),
+        }
+    }
+
+    pub fn get_endpoints(&self) -> Vec<SensitiveUrl> {
+        match &self {
+            Self::Auth { endpoint, .. } => vec![endpoint.clone()],
+            Self::NoAuth(endpoints) => endpoints.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// An Eth1 node (e.g., Geth) running a HTTP JSON-RPC endpoint.
-    pub endpoints: Vec<SensitiveUrl>,
+    pub endpoints: Eth1Endpoint,
     /// The address the `BlockCache` and `DepositCache` should assume is the canonical deposit contract.
     pub deposit_contract_address: String,
-    /// The eth1 network id where the deposit contract is deployed (Goerli/Mainnet).
-    pub network_id: Eth1Id,
     /// The eth1 chain id where the deposit contract is deployed (Goerli/Mainnet).
     pub chain_id: Eth1Id,
     /// Defines the first block that the `DepositCache` will start searching for deposit logs.
@@ -384,6 +407,11 @@ pub struct Config {
     ///
     /// Note: this should be less than or equal to the specification's `ETH1_FOLLOW_DISTANCE`.
     pub follow_distance: u64,
+    /// The follow distance to use for blocks in our cache.
+    ///
+    /// This can be set lower than the true follow distance in order to correct for poor timing
+    /// of eth1 blocks.
+    pub cache_follow_distance: Option<u64>,
     /// Specifies the seconds when we consider the head of a node far behind.
     /// This should be less than `ETH1_FOLLOW_DISTANCE * SECONDS_PER_ETH1_BLOCK`.
     pub node_far_behind_seconds: u64,
@@ -410,34 +438,44 @@ impl Config {
             E::SlotsPerEth1VotingPeriod::to_u64() * spec.seconds_per_slot;
         let eth1_blocks_per_voting_period = seconds_per_voting_period / spec.seconds_per_eth1_block;
 
-        // Compute the number of extra blocks we store prior to the voting period start blocks.
-        let follow_distance_tolerance_blocks =
-            spec.eth1_follow_distance / ETH1_BLOCK_TIME_TOLERANCE_FACTOR;
-
         // Ensure we can store two full windows of voting blocks.
         let voting_windows = eth1_blocks_per_voting_period * 2;
 
-        // Extend the cache to account for varying eth1 block times and the follow distance
-        // tolerance blocks.
-        let length = voting_windows
-            + (voting_windows / ETH1_BLOCK_TIME_TOLERANCE_FACTOR)
-            + follow_distance_tolerance_blocks;
+        // Extend the cache to account for the cache follow distance.
+        let extra_follow_distance_blocks = self
+            .follow_distance
+            .saturating_sub(self.cache_follow_distance());
 
-        self.block_cache_truncation = Some(length as usize);
+        let length = voting_windows + extra_follow_distance_blocks;
+
+        // Allow for more blocks to account for blocks being generated faster than expected.
+        // The cache expiry should really be timestamp based, but that would require a more
+        // extensive refactor.
+        let cache_size = CACHE_FACTOR * length;
+
+        self.block_cache_truncation = Some(cache_size as usize);
+    }
+
+    /// The distance at which the cache should follow the head.
+    ///
+    /// Defaults to 3/4 of `follow_distance` unless set manually.
+    pub fn cache_follow_distance(&self) -> u64 {
+        self.cache_follow_distance
+            .unwrap_or(3 * self.follow_distance / 4)
     }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            endpoints: vec![SensitiveUrl::parse(DEFAULT_ETH1_ENDPOINT)
-                .expect("The default Eth1 endpoint must always be a valid URL.")],
+            endpoints: Eth1Endpoint::NoAuth(vec![SensitiveUrl::parse(DEFAULT_ETH1_ENDPOINT)
+                .expect("The default Eth1 endpoint must always be a valid URL.")]),
             deposit_contract_address: "0x0000000000000000000000000000000000000000".into(),
-            network_id: DEFAULT_NETWORK_ID,
             chain_id: DEFAULT_CHAIN_ID,
             deposit_contract_deploy_block: 1,
             lowest_cached_block_number: 1,
             follow_distance: 128,
+            cache_follow_distance: None,
             node_far_behind_seconds: 128 * 14,
             block_cache_truncation: Some(4_096),
             auto_update_interval_millis: 60_000,
@@ -486,9 +524,8 @@ impl Service {
     ///
     /// This is useful since the spec declares `SECONDS_PER_ETH1_BLOCK` to be `14`, whilst it is
     /// actually `15` on Goerli.
-    pub fn reduced_follow_distance(&self) -> u64 {
-        let full = self.config().follow_distance;
-        full.saturating_sub(full / ETH1_BLOCK_TIME_TOLERANCE_FACTOR)
+    pub fn cache_follow_distance(&self) -> u64 {
+        self.config().cache_follow_distance()
     }
 
     /// Return byte representation of deposit and block caches.
@@ -642,27 +679,45 @@ impl Service {
     }
 
     /// Builds a new `EndpointsCache` with empty states.
-    pub fn init_endpoints(&self) -> Arc<EndpointsCache> {
+    pub fn init_endpoints(&self) -> Result<Arc<EndpointsCache>, String> {
         let endpoints = self.config().endpoints.clone();
-        let config_network_id = self.config().network_id.clone();
         let config_chain_id = self.config().chain_id.clone();
+
+        let servers = match endpoints {
+            Eth1Endpoint::Auth {
+                jwt_path,
+                endpoint,
+                jwt_id,
+                jwt_version,
+            } => {
+                let auth = Auth::new_with_path(jwt_path, jwt_id, jwt_version)
+                    .map_err(|e| format!("Failed to initialize jwt auth: {:?}", e))?;
+                vec![HttpJsonRpc::new_with_auth(endpoint, auth)
+                    .map_err(|e| format!("Failed to build auth enabled json rpc {:?}", e))?]
+            }
+            Eth1Endpoint::NoAuth(urls) => urls
+                .into_iter()
+                .map(|url| {
+                    HttpJsonRpc::new(url).map_err(|e| format!("Failed to build json rpc {:?}", e))
+                })
+                .collect::<Result<_, _>>()?,
+        };
         let new_cache = Arc::new(EndpointsCache {
-            fallback: Fallback::new(endpoints.into_iter().map(EndpointWithState::new).collect()),
-            config_network_id,
+            fallback: Fallback::new(servers.into_iter().map(EndpointWithState::new).collect()),
             config_chain_id,
             log: self.log.clone(),
         });
 
         let mut endpoints_cache = self.inner.endpoints_cache.write();
         *endpoints_cache = Some(new_cache.clone());
-        new_cache
+        Ok(new_cache)
     }
 
     /// Returns the cached `EndpointsCache` if it exists or builds a new one.
-    pub fn get_endpoints(&self) -> Arc<EndpointsCache> {
+    pub fn get_endpoints(&self) -> Result<Arc<EndpointsCache>, String> {
         let endpoints_cache = self.inner.endpoints_cache.read();
         if let Some(cache) = endpoints_cache.clone() {
-            cache
+            Ok(cache)
         } else {
             drop(endpoints_cache);
             self.init_endpoints()
@@ -680,7 +735,7 @@ impl Service {
     pub async fn update(
         &self,
     ) -> Result<(DepositCacheUpdateOutcome, BlockCacheUpdateOutcome), String> {
-        let endpoints = self.get_endpoints();
+        let endpoints = self.get_endpoints()?;
 
         // Reset the state of any endpoints which have errored so their state can be redetermined.
         endpoints.reset_errorred_endpoints().await;
@@ -707,7 +762,7 @@ impl Service {
                     }
                 }
             }
-            endpoints.fallback.map_format_error(|s| &s.endpoint, e)
+            endpoints.fallback.map_format_error(|s| &s.client, e)
         };
 
         let process_err = |e: Error| match &e {
@@ -737,12 +792,32 @@ impl Service {
         *self.inner.remote_head_block.write() = Some(remote_head_block);
 
         let update_deposit_cache = async {
-            let outcome = self
+            let outcome_result = self
                 .update_deposit_cache(Some(new_block_numbers_deposit), &endpoints)
-                .await
-                .map_err(|e| {
-                    format!("Failed to update eth1 deposit cache: {:?}", process_err(e))
-                })?;
+                .await;
+
+            // Reset the `last_procesed block` to the last valid deposit's block number.
+            // This will ensure that the next batch of blocks fetched is immediately after
+            // the last cached valid deposit allowing us to recover from scenarios where
+            // the deposit cache gets corrupted due to invalid responses from eth1 nodes.
+            if let Err(Error::FailedToInsertDeposit(DepositCacheError::NonConsecutive {
+                log_index: _,
+                expected: _,
+            })) = &outcome_result
+            {
+                let mut deposit_cache = self.inner.deposit_cache.write();
+                debug!(
+                    self.log,
+                    "Resetting last processed block";
+                    "old_block_number" => deposit_cache.last_processed_block,
+                    "new_block_number" => deposit_cache.cache.latest_block_number(),
+                );
+                deposit_cache.last_processed_block = deposit_cache.cache.latest_block_number();
+            }
+
+            let outcome = outcome_result.map_err(|e| {
+                format!("Failed to update eth1 deposit cache: {:?}", process_err(e))
+            })?;
 
             trace!(
                 self.log,
@@ -834,9 +909,10 @@ impl Service {
     fn relevant_new_block_numbers(
         &self,
         remote_highest_block: u64,
+        remote_highest_block_timestamp: Option<u64>,
         head_type: HeadType,
     ) -> Result<Option<RangeInclusive<u64>>, SingleEndpointError> {
-        let follow_distance = self.reduced_follow_distance();
+        let follow_distance = self.cache_follow_distance();
         let next_required_block = match head_type {
             HeadType::Deposit => self
                 .deposits()
@@ -852,8 +928,16 @@ impl Service {
                 .map(|n| n + 1)
                 .unwrap_or_else(|| self.config().lowest_cached_block_number),
         };
+        let latest_cached_block = self.latest_cached_block();
 
-        relevant_block_range(remote_highest_block, next_required_block, follow_distance)
+        relevant_block_range(
+            remote_highest_block,
+            remote_highest_block_timestamp,
+            next_required_block,
+            follow_distance,
+            latest_cached_block.as_ref(),
+            &self.inner.spec,
+        )
     }
 
     /// Contacts the remote eth1 node and attempts to import deposit logs up to the configured
@@ -928,15 +1012,15 @@ impl Service {
              */
             let block_range_ref = &block_range;
             let logs = endpoints
-                .first_success(|e| async move {
-                    get_deposit_logs_in_range(
-                        e,
-                        deposit_contract_address_ref,
-                        block_range_ref.clone(),
-                        Duration::from_millis(GET_DEPOSIT_LOG_TIMEOUT_MILLIS),
-                    )
-                    .await
-                    .map_err(SingleEndpointError::GetDepositLogsFailed)
+                .first_success(|endpoint| async move {
+                    endpoint
+                        .get_deposit_logs_in_range(
+                            deposit_contract_address_ref,
+                            block_range_ref.clone(),
+                            Duration::from_millis(GET_DEPOSIT_LOG_TIMEOUT_MILLIS),
+                        )
+                        .await
+                        .map_err(SingleEndpointError::GetDepositLogsFailed)
                 })
                 .await
                 .map(|(res, _)| res)
@@ -1166,7 +1250,7 @@ impl Service {
                 "latest_block_age" => latest_block_mins,
                 "latest_block" => block_cache.highest_block_number(),
                 "total_cached_blocks" => block_cache.len(),
-                "new" => blocks_imported
+                "new" => %blocks_imported
             );
         } else {
             debug!(
@@ -1189,24 +1273,48 @@ impl Service {
 /// Returns an error if `next_required_block > remote_highest_block + 1` which means the remote went
 /// backwards.
 fn relevant_block_range(
-    remote_highest_block: u64,
+    remote_highest_block_number: u64,
+    remote_highest_block_timestamp: Option<u64>,
     next_required_block: u64,
-    reduced_follow_distance: u64,
+    cache_follow_distance: u64,
+    latest_cached_block: Option<&Eth1Block>,
+    spec: &ChainSpec,
 ) -> Result<Option<RangeInclusive<u64>>, SingleEndpointError> {
-    let remote_follow_block = remote_highest_block.saturating_sub(reduced_follow_distance);
+    // If the latest cached block is lagging the head block by more than `cache_follow_distance`
+    // times the expected block time then the eth1 block time is likely quite different from what we
+    // assumed.
+    //
+    // In order to catch up, load batches of `CATCHUP_BATCH_SIZE` until the situation rights itself.
+    // Note that we need to check this condition before the regular follow distance condition
+    // or we will keep downloading small numbers of blocks.
+    if let (Some(remote_highest_block_timestamp), Some(latest_cached_block)) =
+        (remote_highest_block_timestamp, latest_cached_block)
+    {
+        let lagging = latest_cached_block.timestamp
+            + cache_follow_distance * spec.seconds_per_eth1_block
+            < remote_highest_block_timestamp;
+        let end_block = std::cmp::min(
+            remote_highest_block_number.saturating_sub(CATCHUP_MIN_FOLLOW_DISTANCE),
+            next_required_block + CATCHUP_BATCH_SIZE,
+        );
+        if lagging && next_required_block <= end_block {
+            return Ok(Some(next_required_block..=end_block));
+        }
+    }
 
+    let remote_follow_block = remote_highest_block_number.saturating_sub(cache_follow_distance);
     if next_required_block <= remote_follow_block {
         Ok(Some(next_required_block..=remote_follow_block))
-    } else if next_required_block > remote_highest_block + 1 {
+    } else if next_required_block > remote_highest_block_number + 1 {
         // If this is the case, the node must have gone "backwards" in terms of it's sync
         // (i.e., it's head block is lower than it was before).
         //
-        // We assume that the `reduced_follow_distance` should be sufficient to ensure this never
+        // We assume that the `cache_follow_distance` should be sufficient to ensure this never
         // happens, otherwise it is an error.
         Err(SingleEndpointError::RemoteNotSynced {
             next_required_block,
-            remote_highest_block,
-            reduced_follow_distance,
+            remote_highest_block: remote_highest_block_number,
+            cache_follow_distance,
         })
     } else {
         // Return an empty range.
@@ -1221,7 +1329,7 @@ fn relevant_block_range(
 ///
 /// Performs three async calls to an Eth1 HTTP JSON RPC endpoint.
 async fn download_eth1_block(
-    endpoint: &SensitiveUrl,
+    endpoint: &HttpJsonRpc,
     cache: Arc<Inner>,
     block_number_opt: Option<u64>,
 ) -> Result<Eth1Block, SingleEndpointError> {
@@ -1242,15 +1350,15 @@ async fn download_eth1_block(
     });
 
     // Performs a `get_blockByNumber` call to an eth1 node.
-    let http_block = get_block(
-        endpoint,
-        block_number_opt
-            .map(BlockQuery::Number)
-            .unwrap_or_else(|| BlockQuery::Latest),
-        Duration::from_millis(GET_BLOCK_TIMEOUT_MILLIS),
-    )
-    .map_err(SingleEndpointError::BlockDownloadFailed)
-    .await?;
+    let http_block = endpoint
+        .get_block(
+            block_number_opt
+                .map(BlockQuery::Number)
+                .unwrap_or_else(|| BlockQuery::Latest),
+            Duration::from_millis(GET_BLOCK_TIMEOUT_MILLIS),
+        )
+        .map_err(SingleEndpointError::BlockDownloadFailed)
+        .await?;
 
     Ok(Eth1Block {
         hash: http_block.hash,
@@ -1275,8 +1383,8 @@ mod tests {
     #[test]
     fn serde_serialize() {
         let serialized =
-            toml::to_string(&Config::default()).expect("Should serde encode default config");
-        toml::from_str::<Config>(&serialized).expect("Should serde decode default config");
+            serde_yaml::to_string(&Config::default()).expect("Should serde encode default config");
+        serde_yaml::from_str::<Config>(&serialized).expect("Should serde decode default config");
     }
 
     #[test]
@@ -1292,10 +1400,9 @@ mod tests {
         let seconds_per_voting_period =
             <MainnetEthSpec as EthSpec>::SlotsPerEth1VotingPeriod::to_u64() * spec.seconds_per_slot;
         let eth1_blocks_per_voting_period = seconds_per_voting_period / spec.seconds_per_eth1_block;
-        let reduce_follow_distance_blocks =
-            config.follow_distance / ETH1_BLOCK_TIME_TOLERANCE_FACTOR;
+        let cache_follow_distance_blocks = config.follow_distance - config.cache_follow_distance();
 
-        let minimum_len = eth1_blocks_per_voting_period * 2 + reduce_follow_distance_blocks;
+        let minimum_len = eth1_blocks_per_voting_period * 2 + cache_follow_distance_blocks;
 
         assert!(len > minimum_len as usize);
     }

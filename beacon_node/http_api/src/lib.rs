@@ -48,8 +48,9 @@ use types::{
     Attestation, AttesterSlashing, BeaconBlockBodyMerge, BeaconBlockMerge, BeaconStateError,
     BlindedPayload, CommitteeCache, ConfigAndPreset, Epoch, EthSpec, ForkName, FullPayload,
     ProposerPreparationData, ProposerSlashing, RelativeEpoch, Signature, SignedAggregateAndProof,
-    SignedBeaconBlock, SignedBeaconBlockMerge, SignedContributionAndProof, SignedVoluntaryExit,
-    Slot, SyncCommitteeMessage, SyncContributionData,
+    SignedBeaconBlock, SignedBeaconBlockMerge, SignedBlindedBeaconBlock,
+    SignedContributionAndProof, SignedValidatorRegistrationData, SignedVoluntaryExit, Slot,
+    SyncCommitteeMessage, SyncContributionData,
 };
 use version::{
     add_consensus_version_header, fork_versioned_response, inconsistent_fork_rejection,
@@ -199,18 +200,29 @@ pub fn prometheus_metrics() -> warp::filters::log::Log<impl Fn(warp::filters::lo
 
             // First line covers `POST /v1/beacon/blocks` only
             equals("v1/beacon/blocks")
-                .or_else(|| starts_with("v1/validator/duties/attester"))
-                .or_else(|| starts_with("v1/validator/duties/proposer"))
-                .or_else(|| starts_with("v1/validator/attestation_data"))
                 .or_else(|| starts_with("v1/validator/blocks"))
                 .or_else(|| starts_with("v2/validator/blocks"))
+                .or_else(|| starts_with("v1/validator/blinded_blocks"))
+                .or_else(|| starts_with("v1/validator/duties/attester"))
+                .or_else(|| starts_with("v1/validator/duties/proposer"))
+                .or_else(|| starts_with("v1/validator/duties/sync"))
+                .or_else(|| starts_with("v1/validator/attestation_data"))
                 .or_else(|| starts_with("v1/validator/aggregate_attestation"))
                 .or_else(|| starts_with("v1/validator/aggregate_and_proofs"))
+                .or_else(|| starts_with("v1/validator/sync_committee_contribution"))
+                .or_else(|| starts_with("v1/validator/contribution_and_proofs"))
                 .or_else(|| starts_with("v1/validator/beacon_committee_subscriptions"))
+                .or_else(|| starts_with("v1/validator/sync_committee_subscriptions"))
+                .or_else(|| starts_with("v1/beacon/pool/attestations"))
+                .or_else(|| starts_with("v1/beacon/pool/sync_committees"))
+                .or_else(|| starts_with("v1/beacon/blocks/head/root"))
+                .or_else(|| starts_with("v1/validator/prepare_beacon_proposer"))
+                .or_else(|| starts_with("v1/validator/register_validator"))
                 .or_else(|| starts_with("v1/beacon/"))
                 .or_else(|| starts_with("v2/beacon/"))
                 .or_else(|| starts_with("v1/config/"))
                 .or_else(|| starts_with("v1/debug/"))
+                .or_else(|| starts_with("v2/debug/"))
                 .or_else(|| starts_with("v1/events/"))
                 .or_else(|| starts_with("v1/node/"))
                 .or_else(|| starts_with("v1/validator/"))
@@ -826,10 +838,10 @@ pub fn serve<T: BeaconChainTypes>(
                         (None, None) => chain
                             .head_beacon_block()
                             .map_err(warp_utils::reject::beacon_chain_error)
-                            .map(|block| (block.canonical_root(), block))?,
+                            .map(|block| (block.canonical_root(), block.into()))?,
                         // Only the parent root parameter, do a forwards-iterator lookup.
                         (None, Some(parent_root)) => {
-                            let parent = BlockId::from_root(parent_root).block(&chain)?;
+                            let parent = BlockId::from_root(parent_root).blinded_block(&chain)?;
                             let (root, _slot) = chain
                                 .forwards_iter_block_roots(parent.slot())
                                 .map_err(warp_utils::reject::beacon_chain_error)?
@@ -847,14 +859,14 @@ pub fn serve<T: BeaconChainTypes>(
                                 })?;
 
                             BlockId::from_root(root)
-                                .block(&chain)
+                                .blinded_block(&chain)
                                 .map(|block| (root, block))?
                         }
                         // Slot is supplied, search by slot and optionally filter by
                         // parent root.
                         (Some(slot), parent_root_opt) => {
                             let root = BlockId::from_slot(slot).root(&chain)?;
-                            let block = BlockId::from_root(root).block(&chain)?;
+                            let block = BlockId::from_root(root).blinded_block(&chain)?;
 
                             // If the parent root was supplied, check that it matches the block
                             // obtained via a slot lookup.
@@ -899,7 +911,7 @@ pub fn serve<T: BeaconChainTypes>(
         .and_then(|block_id: BlockId, chain: Arc<BeaconChain<T>>| {
             blocking_json_task(move || {
                 let root = block_id.root(&chain)?;
-                let block = BlockId::from_root(root).block(&chain)?;
+                let block = BlockId::from_root(root).blinded_block(&chain)?;
 
                 let canonical = chain
                     .block_root_at_slot(block.slot(), WhenSlotSkipped::None)
@@ -1161,8 +1173,8 @@ pub fn serve<T: BeaconChainTypes>(
              block_id: BlockId,
              chain: Arc<BeaconChain<T>>,
              accept_header: Option<api_types::Accept>| {
-                blocking_task(move || {
-                    let block = block_id.block(&chain)?;
+                async move {
+                    let block = block_id.full_block(&chain).await?;
                     let fork_name = block
                         .fork_name(&chain.spec)
                         .map_err(inconsistent_fork_rejection)?;
@@ -1181,7 +1193,7 @@ pub fn serve<T: BeaconChainTypes>(
                             .map(|res| warp::reply::json(&res).into_response()),
                     }
                     .map(|resp| add_consensus_version_header(resp, fork_name))
-                })
+                }
             },
         );
 
@@ -1207,7 +1219,7 @@ pub fn serve<T: BeaconChainTypes>(
         .and_then(|block_id: BlockId, chain: Arc<BeaconChain<T>>| {
             blocking_json_task(move || {
                 block_id
-                    .block(&chain)
+                    .blinded_block(&chain)
                     .map(|block| block.message().body().attestations().clone())
                     .map(api_types::GenericResponse::from)
             })
@@ -1736,9 +1748,9 @@ pub fn serve<T: BeaconChainTypes>(
                         .head_info()
                         .map(|info| info.slot)
                         .map_err(warp_utils::reject::beacon_chain_error)?;
-                    let current_slot = chain
-                        .slot()
-                        .map_err(warp_utils::reject::beacon_chain_error)?;
+                    let current_slot = chain.slot_clock.now_or_genesis().ok_or_else(|| {
+                        warp_utils::reject::custom_server_error("Unable to read slot clock".into())
+                    })?;
 
                     // Taking advantage of saturating subtraction on slot.
                     let sync_distance = current_slot - head_slot;
@@ -2138,6 +2150,12 @@ pub fn serve<T: BeaconChainTypes>(
                             query.slot,
                             &query.attestation_data_root,
                         )
+                        .map_err(|e| {
+                            warp_utils::reject::custom_bad_request(format!(
+                                "unable to fetch aggregate: {:?}",
+                                e
+                            ))
+                        })?
                         .map(api_types::GenericResponse::from)
                         .ok_or_else(|| {
                             warp_utils::reject::custom_not_found(
@@ -2390,12 +2408,10 @@ pub fn serve<T: BeaconChainTypes>(
         .and(warp::path::end())
         .and(not_while_syncing_filter.clone())
         .and(chain_filter.clone())
-        .and(warp::addr::remote())
         .and(log_filter.clone())
         .and(warp::body::json())
         .and_then(
             |chain: Arc<BeaconChain<T>>,
-             client_addr: Option<SocketAddr>,
              log: Logger,
              preparation_data: Vec<ProposerPreparationData>| {
                 blocking_json_task(move || {
@@ -2412,9 +2428,6 @@ pub fn serve<T: BeaconChainTypes>(
                         log,
                         "Received proposer preparation data";
                         "count" => preparation_data.len(),
-                        "client" => client_addr
-                            .map(|a| a.to_string())
-                            .unwrap_or_else(|| "unknown".to_string()),
                     );
 
                     execution_layer
@@ -2437,6 +2450,82 @@ pub fn serve<T: BeaconChainTypes>(
             },
         );
 
+    // POST validator/register_validator
+    let post_validator_register_validator = eth1_v1
+        .and(warp::path("validator"))
+        .and(warp::path("register_validator"))
+        .and(warp::path::end())
+        .and(chain_filter.clone())
+        .and(log_filter.clone())
+        .and(warp::body::json())
+        .and_then(
+            |chain: Arc<BeaconChain<T>>,
+             log: Logger,
+             register_val_data: Vec<SignedValidatorRegistrationData>| {
+                blocking_json_task(move || {
+                    let execution_layer = chain
+                        .execution_layer
+                        .as_ref()
+                        .ok_or(BeaconChainError::ExecutionLayerMissing)
+                        .map_err(warp_utils::reject::beacon_chain_error)?;
+                    let current_epoch = chain
+                        .slot_clock
+                        .now_or_genesis()
+                        .ok_or(BeaconChainError::UnableToReadSlot)
+                        .map_err(warp_utils::reject::beacon_chain_error)?
+                        .epoch(T::EthSpec::slots_per_epoch());
+
+                    debug!(
+                        log,
+                        "Received register validator request";
+                        "count" => register_val_data.len(),
+                    );
+
+                    let preparation_data = register_val_data
+                        .iter()
+                        .filter_map(|register_data| {
+                            chain
+                                .validator_index(&register_data.message.pubkey)
+                                .ok()
+                                .flatten()
+                                .map(|validator_index| ProposerPreparationData {
+                                    validator_index: validator_index as u64,
+                                    fee_recipient: register_data.message.fee_recipient,
+                                })
+                        })
+                        .collect::<Vec<_>>();
+
+                    debug!(
+                        log,
+                        "Resolved validator request pubkeys";
+                        "count" => preparation_data.len()
+                    );
+
+                    // Update the prepare beacon proposer cache based on this request.
+                    execution_layer
+                        .update_proposer_preparation_blocking(current_epoch, &preparation_data)
+                        .map_err(|_e| {
+                            warp_utils::reject::custom_bad_request(
+                                "error processing proposer preparations".to_string(),
+                            )
+                        })?;
+
+                    // Call prepare beacon proposer blocking with the latest update in order to make
+                    // sure we have a local payload to fall back to in the event of the blined block
+                    // flow failing.
+                    chain.prepare_beacon_proposer_blocking().map_err(|e| {
+                        warp_utils::reject::custom_bad_request(format!(
+                            "error updating proposer preparations: {:?}",
+                            e
+                        ))
+                    })?;
+
+                    //TODO(sean): In the MEV-boost PR, add a call here to send the update request to the builder
+
+                    Ok(())
+                })
+            },
+        );
     // POST validator/sync_committee_subscriptions
     let post_validator_sync_committee_subscriptions = eth1_v1
         .and(warp::path("validator"))
@@ -2780,7 +2869,7 @@ pub fn serve<T: BeaconChainTypes>(
         .and(chain_filter.clone())
         .and(log_filter.clone())
         .and_then(
-            |blocks: Vec<SignedBeaconBlock<T::EthSpec>>,
+            |blocks: Vec<SignedBlindedBeaconBlock<T::EthSpec>>,
              chain: Arc<BeaconChain<T>>,
              log: Logger| {
                 info!(
@@ -2803,6 +2892,18 @@ pub fn serve<T: BeaconChainTypes>(
         .and(log_filter.clone())
         .and_then(|query, chain, log| {
             blocking_json_task(move || block_rewards::get_block_rewards(query, chain, log))
+        });
+
+    // POST lighthouse/analysis/block_rewards
+    let post_lighthouse_block_rewards = warp::path("lighthouse")
+        .and(warp::path("analysis"))
+        .and(warp::path("block_rewards"))
+        .and(warp::body::json())
+        .and(warp::path::end())
+        .and(chain_filter.clone())
+        .and(log_filter.clone())
+        .and_then(|blocks, chain, log| {
+            blocking_json_task(move || block_rewards::compute_block_rewards(blocks, chain, log))
         });
 
     // GET lighthouse/analysis/attestation_performance/{index}
@@ -2978,9 +3079,11 @@ pub fn serve<T: BeaconChainTypes>(
                 .or(post_validator_beacon_committee_subscriptions.boxed())
                 .or(post_validator_sync_committee_subscriptions.boxed())
                 .or(post_validator_prepare_beacon_proposer.boxed())
+                .or(post_validator_register_validator.boxed())
                 .or(post_lighthouse_liveness.boxed())
                 .or(post_lighthouse_database_reconstruct.boxed())
-                .or(post_lighthouse_database_historical_blocks.boxed()),
+                .or(post_lighthouse_database_historical_blocks.boxed())
+                .or(post_lighthouse_block_rewards.boxed()),
         ))
         .recover(warp_utils::reject::handle_rejection)
         .with(slog_logging(log.clone()))

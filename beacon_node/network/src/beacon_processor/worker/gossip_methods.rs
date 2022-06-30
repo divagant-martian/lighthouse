@@ -45,7 +45,7 @@ struct VerifiedUnaggregate<T: BeaconChainTypes> {
 
 /// This implementation allows `Self` to be imported to fork choice and other functions on the
 /// `BeaconChain`.
-impl<'a, T: BeaconChainTypes> VerifiedAttestation<T> for VerifiedUnaggregate<T> {
+impl<T: BeaconChainTypes> VerifiedAttestation<T> for VerifiedUnaggregate<T> {
     fn attestation(&self) -> &Attestation<T::EthSpec> {
         &self.attestation
     }
@@ -72,7 +72,7 @@ struct VerifiedAggregate<T: BeaconChainTypes> {
 
 /// This implementation allows `Self` to be imported to fork choice and other functions on the
 /// `BeaconChain`.
-impl<'a, T: BeaconChainTypes> VerifiedAttestation<T> for VerifiedAggregate<T> {
+impl<T: BeaconChainTypes> VerifiedAttestation<T> for VerifiedAggregate<T> {
     fn attestation(&self) -> &Attestation<T::EthSpec> {
         &self.signed_aggregate.message.aggregate
     }
@@ -942,6 +942,16 @@ impl<T: BeaconChainTypes> Worker<T> {
                     "peer_id" => %peer_id
                 );
                 self.send_sync_message(SyncMessage::UnknownBlock(peer_id, block));
+            }
+            Err(e @ BlockError::ExecutionPayloadError(ExecutionPayloadError::RequestFailed(_)))
+            | Err(
+                e @ BlockError::ExecutionPayloadError(ExecutionPayloadError::NoExecutionConnection),
+            ) => {
+                debug!(
+                    self.log,
+                    "Failed to verify execution payload";
+                    "error" => %e
+                );
             }
             other => {
                 debug!(

@@ -85,7 +85,7 @@ impl ForkChoiceTestDefinition {
             self.finalized_checkpoint,
             junk_shuffling_id.clone(),
             junk_shuffling_id,
-            ExecutionStatus::Unknown(ExecutionBlockHash::zero()),
+            ExecutionStatus::Optimistic(ExecutionBlockHash::zero()),
         )
         .expect("should create fork choice struct");
 
@@ -105,7 +105,6 @@ impl ForkChoiceTestDefinition {
                             Hash256::zero(),
                             &spec,
                         )
-                        .map_err(|e| e)
                         .unwrap_or_else(|e| {
                             panic!("find_head op at index {} returned error {}", op_index, e)
                         });
@@ -132,7 +131,6 @@ impl ForkChoiceTestDefinition {
                             proposer_boost_root,
                             &spec,
                         )
-                        .map_err(|e| e)
                         .unwrap_or_else(|e| {
                             panic!("find_head op at index {} returned error {}", op_index, e)
                         });
@@ -189,9 +187,9 @@ impl ForkChoiceTestDefinition {
                         justified_checkpoint,
                         finalized_checkpoint,
                         // All blocks are imported optimistically.
-                        execution_status: ExecutionStatus::Unknown(ExecutionBlockHash::from_root(
-                            root,
-                        )),
+                        execution_status: ExecutionStatus::Optimistic(
+                            ExecutionBlockHash::from_root(root),
+                        ),
                     };
                     fork_choice.process_block(block).unwrap_or_else(|e| {
                         panic!(

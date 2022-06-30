@@ -201,6 +201,16 @@ pub struct BlocksByRangeRequest {
 
     /// The number of blocks from the start slot.
     pub count: u64,
+}
+
+/// Request a number of beacon block roots from a peer.
+#[derive(Encode, Decode, Clone, Debug, PartialEq)]
+pub struct OldBlocksByRangeRequest {
+    /// The starting slot to request blocks.
+    pub start_slot: u64,
+
+    /// The number of blocks from the start slot.
+    pub count: u64,
 
     /// The step increment to receive blocks.
     ///
@@ -335,6 +345,19 @@ impl RPCResponseErrorCode {
     }
 }
 
+use super::Protocol;
+impl<T: EthSpec> RPCResponse<T> {
+    pub fn protocol(&self) -> Protocol {
+        match self {
+            RPCResponse::Status(_) => Protocol::Status,
+            RPCResponse::BlocksByRange(_) => Protocol::BlocksByRange,
+            RPCResponse::BlocksByRoot(_) => Protocol::BlocksByRoot,
+            RPCResponse::Pong(_) => Protocol::Ping,
+            RPCResponse::MetaData(_) => Protocol::MetaData,
+        }
+    }
+}
+
 impl std::fmt::Display for RPCResponseErrorCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let repr = match self {
@@ -397,6 +420,12 @@ impl std::fmt::Display for GoodbyeReason {
 }
 
 impl std::fmt::Display for BlocksByRangeRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Start Slot: {}, Count: {}", self.start_slot, self.count)
+    }
+}
+
+impl std::fmt::Display for OldBlocksByRangeRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,

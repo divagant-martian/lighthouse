@@ -237,5 +237,7 @@ define_hardcoded_nets!(
     (mainnet, "mainnet", GENESIS_STATE_IS_KNOWN),
     (prater, "prater", GENESIS_STATE_IS_KNOWN),
     (gnosis, "gnosis", GENESIS_STATE_IS_KNOWN),
-    (kiln, "kiln", GENESIS_STATE_IS_KNOWN)
+    (kiln, "kiln", GENESIS_STATE_IS_KNOWN),
+    (ropsten, "ropsten", GENESIS_STATE_IS_KNOWN),
+    (sepolia, "sepolia", GENESIS_STATE_IS_KNOWN)
 );
