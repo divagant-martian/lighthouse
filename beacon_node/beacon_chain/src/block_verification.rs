@@ -44,7 +44,7 @@
 //! ```
 use crate::execution_payload::{
     is_optimistic_candidate_block, validate_execution_payload_for_gossip, validate_merge_block,
-    PayloadNotifier,
+    AllowOptimisticImport, PayloadNotifier,
 };
 use crate::snapshot_cache::PreProcessingSnapshot;
 use crate::validator_monitor::HISTORIC_EPOCHS as VALIDATOR_MONITOR_HISTORIC_EPOCHS;
@@ -1199,7 +1199,7 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
             // - Doing the check here means we can keep our fork-choice implementation "pure". I.e., no
             //   calls to remote servers.
             if is_valid_merge_transition_block {
-                validate_merge_block(&chain, block.message()).await?;
+                validate_merge_block(&chain, block.message(), AllowOptimisticImport::Yes).await?;
             };
 
             // The specification declares that this should be run *inside* `per_block_processing`,
@@ -1416,6 +1416,10 @@ fn check_block_against_finalized_slot<T: BeaconChainTypes>(
     block_root: Hash256,
     chain: &BeaconChain<T>,
 ) -> Result<(), BlockError<T::EthSpec>> {
+    // The finalized checkpoint is being read from fork choice, rather than the cached head.
+    //
+    // Fork choice has the most up-to-date view of finalization and there's no point importing a
+    // block which conflicts with the fork-choice view of finalization.
     let finalized_slot = chain
         .canonical_head
         .cached_head()

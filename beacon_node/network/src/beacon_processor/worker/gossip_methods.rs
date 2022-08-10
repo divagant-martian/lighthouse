@@ -6,7 +6,8 @@ use beacon_chain::{
     observed_operations::ObservationOutcome,
     sync_committee_verification::{self, Error as SyncCommitteeError},
     validator_monitor::get_block_delay_ms,
-    BeaconChainError, BeaconChainTypes, BlockError, ForkChoiceError, GossipVerifiedBlock,
+    BeaconChainError, BeaconChainTypes, BlockError, CountUnrealized, ForkChoiceError,
+    GossipVerifiedBlock,
 };
 use lighthouse_network::{Client, MessageAcceptance, MessageId, PeerAction, PeerId, ReportSource};
 use slog::{crit, debug, error, info, trace, warn};
@@ -770,12 +771,15 @@ impl<T: BeaconChainTypes> Worker<T> {
                 debug!(self.log, "Could not verify block for gossip, ignoring the block";
                             "error" => %e);
                 // Prevent recurring behaviour by penalizing the peer slightly.
-                self.gossip_penalize_peer(peer_id, PeerAction::HighToleranceError, "gossip_block_high");
+                self.gossip_penalize_peer(
+                    peer_id,
+                    PeerAction::HighToleranceError,
+                    "gossip_block_high",
+                );
                 self.propagate_validation_result(message_id, peer_id, MessageAcceptance::Ignore);
                 return None;
             }
-            // TODO(merge): reconsider peer scoring for this event.
-            Err(ref e @BlockError::ExecutionPayloadError(ref epe)) if !epe.penalize_peer() => {
+            Err(ref e @ BlockError::ExecutionPayloadError(ref epe)) if !epe.penalize_peer() => {
                 debug!(self.log, "Could not verify block for gossip, ignoring the block";
                             "error" => %e);
                 self.propagate_validation_result(message_id, peer_id, MessageAcceptance::Ignore);
@@ -794,7 +798,6 @@ impl<T: BeaconChainTypes> Worker<T> {
             | Err(e @ BlockError::TooManySkippedSlots { .. })
             | Err(e @ BlockError::WeakSubjectivityConflict)
             | Err(e @ BlockError::InconsistentFork(_))
-            // TODO(merge): reconsider peer scoring for this event.
             | Err(e @ BlockError::ExecutionPayloadError(_))
             // TODO(merge): reconsider peer scoring for this event.
             | Err(e @ BlockError::ParentExecutionPayloadInvalid { .. })
@@ -802,7 +805,11 @@ impl<T: BeaconChainTypes> Worker<T> {
                 warn!(self.log, "Could not verify block for gossip, rejecting the block";
                             "error" => %e);
                 self.propagate_validation_result(message_id, peer_id, MessageAcceptance::Reject);
-                self.gossip_penalize_peer(peer_id, PeerAction::LowToleranceError, "gossip_block_low");
+                self.gossip_penalize_peer(
+                    peer_id,
+                    PeerAction::LowToleranceError,
+                    "gossip_block_low",
+                );
                 return None;
             }
         };
@@ -899,7 +906,11 @@ impl<T: BeaconChainTypes> Worker<T> {
     ) {
         let block: Arc<_> = verified_block.block.clone();
 
-        match self.chain.process_block(verified_block).await {
+        match self
+            .chain
+            .process_block(verified_block, CountUnrealized::True)
+            .await
+        {
             Ok(block_root) => {
                 metrics::inc_counter(&metrics::BEACON_PROCESSOR_GOSSIP_BLOCK_IMPORTED_TOTAL);
 
@@ -922,21 +933,7 @@ impl<T: BeaconChainTypes> Worker<T> {
                     "peer_id" => %peer_id
                 );
 
-                if let Err(e) = self.chain.recompute_head_at_current_slot().await {
-                    error!(
-                        self.log,
-                        "Fork choice failed";
-                        "error" => ?e,
-                        "location" => "block_gossip"
-                    )
-                } else {
-                    debug!(
-                        self.log,
-                        "Fork choice success";
-                        "block" => ?block_root,
-                        "location" => "block_gossip"
-                    )
-                }
+                self.chain.recompute_head_at_current_slot().await;
             }
             Err(BlockError::ParentUnknown { .. }) => {
                 // Inform the sync manager to find parents for this block
