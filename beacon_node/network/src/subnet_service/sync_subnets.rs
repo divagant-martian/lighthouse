@@ -1,5 +1,6 @@
-//! This service keeps track of which sync committee subnet the beacon node should be subscribed to at any
-//! given time. It schedules subscriptions to sync committee subnets and requests peer discoveries.
+//! This service keeps track of which sync committee subnet the beacon node should be subscribed to
+//! at any given time. It schedules subscriptions to sync committee subnets and requests peer
+//! discoveries.
 
 use std::collections::{hash_map::Entry, HashMap, VecDeque};
 use std::pin::Pin;
@@ -12,7 +13,7 @@ use slog::{debug, error, o, trace, warn};
 
 use super::SubnetServiceMessage;
 use beacon_chain::{BeaconChain, BeaconChainTypes};
-use delay_map::HashSetDelay;
+use hashset_delay::HashSetDelay;
 use lighthouse_network::{NetworkConfig, Subnet, SubnetDiscovery};
 use slot_clock::SlotClock;
 use types::{Epoch, EthSpec, SyncCommitteeSubscription, SyncSubnetId};
@@ -32,6 +33,7 @@ pub struct ExactSubnet {
     /// The epoch until which we need to stay subscribed to the subnet.
     pub until_epoch: Epoch,
 }
+
 pub struct SyncCommitteeService<T: BeaconChainTypes> {
     /// Queued events to return to the driving service.
     events: VecDeque<SubnetServiceMessage>,

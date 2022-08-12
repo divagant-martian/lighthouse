@@ -2561,6 +2561,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashset_delay"
+version = "0.2.0"
+dependencies = [
+ "futures",
+ "tokio",
+ "tokio-util 0.6.10",
+]
+
+[[package]]
 name = "headers"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3106,6 +3115,7 @@ name = "lcli"
 version = "2.5.1"
 dependencies = [
  "account_utils",
+ "beacon_chain",
  "bls",
  "clap",
  "clap_utils",
@@ -3129,6 +3139,7 @@ dependencies = [
  "serde_yaml",
  "snap",
  "state_processing",
+ "store",
  "tree_hash",
  "types",
  "validator_dir",
@@ -3651,7 +3662,6 @@ dependencies = [
 name = "lighthouse_network"
 version = "0.2.0"
 dependencies = [
- "delay_map",
  "directory",
  "dirs",
  "discv5",
@@ -3662,6 +3672,7 @@ dependencies = [
  "exit-future",
  "fnv",
  "futures",
+ "hashset_delay",
  "hex",
  "lazy_static",
  "libp2p",
@@ -4131,6 +4142,7 @@ dependencies = [
  "fnv",
  "futures",
  "genesis",
+ "hashset_delay",
  "hex",
  "if-addrs 0.6.7",
  "igd",
@@ -7072,6 +7084,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "maplit",
  "parking_lot 0.12.1",
  "rand 0.8.5",
  "rand_xorshift",

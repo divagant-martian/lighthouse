@@ -1,4 +1,5 @@
 pub mod attestation_subnets;
+mod subscription_scheduler;
 pub mod sync_subnets;
 
 use lighthouse_network::{Subnet, SubnetDiscovery};
