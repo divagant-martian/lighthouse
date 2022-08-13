@@ -20,9 +20,8 @@ use types::{Epoch, EthSpec, SyncCommitteeSubscription, SyncSubnetId};
 
 use crate::metrics;
 
-/// The minimum number of slots ahead that we attempt to discover peers for a subscription. If the
-/// slot is less than this number, skip the peer discovery process.
-/// Subnet discovery query takes at most 30 secs, 2 slots take 24s.
+/// The minimum number of slots ahead that we attempt to discover peers for a subscription.
+/// If the slot is less than this number, skip the peer discovery process.
 const MIN_PEER_DISCOVERY_SLOT_LOOK_AHEAD: u64 = 2;
 
 /// A particular subnet at a given slot.

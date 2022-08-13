@@ -10,6 +10,10 @@ use std::{
 use slot_clock::SlotClock;
 use types::{Slot, SubnetId};
 
+/// The minimum number of slots ahead that we attempt to discover peers for a subscription.
+/// If the slot is less than this number, skip the peer discovery process.
+const MIN_PEER_DISCOVERY_SLOT_LOOK_AHEAD: u64 = 2;
+
 /// Events emitted by the [`SubscriptionScheduler`]
 #[derive(Debug, PartialEq)]
 pub enum Event {
@@ -17,9 +21,15 @@ pub enum Event {
     Subscribe(SubnetId),
     /// We no longer consider ourselves subscribed to this subnet.
     Unsubscribe(SubnetId),
+    /// We should find peers subscribed to this subnet.
+    FindPeers {
+        subnet_id: SubnetId,
+        min_ttl: std::time::Instant,
+    },
 }
 
 /// Scheduler for subnet subscriptions in a slot scale.
+#[allow(dead_code)]
 pub struct Subscriptions<S> {
     /// Subnets currently subscribed to and the slot in which their subscription ends.
     current_subscriptions: HashMapDelay<SubnetId, Slot>,
@@ -30,6 +40,9 @@ pub struct Subscriptions<S> {
     /// When scheduling a subscription that must be ready in certain slot, the scheduled time will
     /// be advanced using this field.
     advance_subscription_duration: Duration,
+    /// Whether we send out events to discover peers. Peer discovery will only be done for
+    /// subscriptions far enough in the future, according to `MIN_PEER_DISCOVERY_SLOT_LOOK_AHEAD`.
+    discovery_enabled: bool,
     /// Events to emit when a subscription starts and ends being active.
     events: VecDeque<Event>,
     /// Waker for this task.
@@ -42,6 +55,7 @@ impl<S: SlotClock> Subscriptions<S> {
     pub fn new(
         subscription_duration_slots: u64,
         advance_subscription_duration: Duration,
+        discovery_enabled: bool,
         slot_clock: &S,
     ) -> Self {
         let default_subscription_duration_millis = Duration::from_millis(
@@ -53,6 +67,7 @@ impl<S: SlotClock> Subscriptions<S> {
             subscription_duration_slots,
             scheduled_subscriptions: HashSetDelay::new(default_scheduling_duration),
             advance_subscription_duration,
+            discovery_enabled,
             events: Default::default(),
             waker: Default::default(),
             _phantom: Default::default(),
@@ -241,9 +256,11 @@ mod tests {
                 } else if ADVANCE_SUBSCRIPTION_DURATION.is_zero() {
                     panic!("Tests assume advance_subscription_duration is positive.");
                 };
+            let discovery_enabled = false;
             Subscriptions::new(
                 SUBSCRIPTION_DURATION_SLOTS,
                 ADVANCE_SUBSCRIPTION_DURATION,
+                discovery_enabled,
                 slot_clock,
             )
         }
