@@ -4,7 +4,7 @@ use std::{
     collections::VecDeque,
     marker::PhantomData,
     task::{Context, Poll, Waker},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use slot_clock::SlotClock;
@@ -103,8 +103,12 @@ impl<S: SlotClock> Subscriptions<S> {
             )?;
         } else {
             // This is a future slot, schedule subscribing.
-            self.scheduled_subscriptions
-                .insert_at((subnet_id, start_slot), time_to_subscription_start);
+            self.schedule_subscription(
+                subnet_id,
+                start_slot,
+                time_to_subscription_start,
+                slot_clock,
+            )?;
         }
 
         Ok(())
@@ -218,6 +222,32 @@ impl<S: SlotClock> Subscriptions<S> {
 
         Poll::Pending
     }
+
+    /// Schedules subscribing to a subnet in the future. If there is enough time for a peer
+    /// discovery it queues the corresponding event.
+    fn schedule_subscription(
+        &mut self,
+        subnet_id: SubnetId,
+        start_slot: Slot,
+        time_to_subscription_start: Duration,
+        slot_clock: &S,
+    ) -> Result<(), &'static str> {
+        self.scheduled_subscriptions
+            .insert_at((subnet_id, start_slot), time_to_subscription_start);
+        if self.discovery_enabled {
+            if time_to_subscription_start.as_millis()
+                >= slot_clock.slot_duration().as_millis()
+                    * MIN_PEER_DISCOVERY_SLOT_LOOK_AHEAD as u128
+            {
+                let time_to_subscription_end = slot_clock
+                    .duration_to_slot(start_slot + self.subscription_duration_slots)
+                    .ok_or("Failed to get duration to end of subscription slot")?;
+                let min_ttl = Instant::now() + time_to_subscription_end;
+                self.queue_event(Event::FindPeers { subnet_id, min_ttl })
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -229,9 +259,10 @@ mod tests {
 
     use super::*;
 
-    const SLOT_DURATION_MILLIS: u64 = 400;
+    const SLOT_DURATION_MILLIS: u64 = 100;
     const SUBSCRIPTION_DURATION_SLOTS: u64 = 1;
-    const ADVANCE_SUBSCRIPTION_DURATION: Duration = Duration::from_millis(10);
+    // a third of a slot duration.
+    const ADVANCE_SUBSCRIPTION_DURATION: Duration = Duration::from_millis(SLOT_DURATION_MILLIS / 3);
 
     fn recent_genesis_time() -> u64 {
         SystemTime::now()
@@ -390,7 +421,7 @@ mod tests {
         let no_events = get_events(
             &mut scheduler,
             &slot_clock,
-            start_slot2 + SUBSCRIPTION_DURATION_SLOTS,
+            start_slot2 + SUBSCRIPTION_DURATION_SLOTS - 1,
         )
         .await
         .unwrap();
