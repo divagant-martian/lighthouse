@@ -232,21 +232,11 @@ pub struct BlocksByRootRequest {
 // Collection of enums and structs used by the Codecs to encode/decode RPC messages
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum RPCResponse<T: EthSpec> {
-    /// A HELLO message.
+pub enum InboundResponse<T: EthSpec> {
     Status(StatusMessage),
-
-    /// A response to a get BLOCKS_BY_RANGE request. A None response signifies the end of the
-    /// batch.
     BlocksByRange(Arc<SignedBeaconBlock<T>>),
-
-    /// A response to a get BLOCKS_BY_ROOT request.
     BlocksByRoot(Arc<SignedBeaconBlock<T>>),
-
-    /// A PONG response to a PING request.
     Pong(Ping),
-
-    /// A response to a META_DATA request.
     MetaData(MetaData<T>),
 }
 
@@ -265,7 +255,7 @@ pub enum ResponseTermination {
 #[derive(Debug, Clone)]
 pub enum RPCCodedResponse<T: EthSpec> {
     /// The response is a successful.
-    Success(RPCResponse<T>),
+    Success(InboundResponse<T>),
 
     Error(RPCResponseErrorCode, ErrorType),
 
@@ -316,11 +306,11 @@ impl<T: EthSpec> RPCCodedResponse<T> {
     pub fn multiple_responses(&self) -> bool {
         match self {
             RPCCodedResponse::Success(resp) => match resp {
-                RPCResponse::Status(_) => false,
-                RPCResponse::BlocksByRange(_) => true,
-                RPCResponse::BlocksByRoot(_) => true,
-                RPCResponse::Pong(_) => false,
-                RPCResponse::MetaData(_) => false,
+                InboundResponse::Status(_) => false,
+                InboundResponse::BlocksByRange(_) => true,
+                InboundResponse::BlocksByRoot(_) => true,
+                InboundResponse::Pong(_) => false,
+                InboundResponse::MetaData(_) => false,
             },
             RPCCodedResponse::Error(_, _) => true,
             // Stream terminations are part of responses that have chunks
@@ -347,14 +337,14 @@ impl RPCResponseErrorCode {
 }
 
 use super::Protocol;
-impl<T: EthSpec> RPCResponse<T> {
+impl<T: EthSpec> InboundResponse<T> {
     pub fn protocol(&self) -> Protocol {
         match self {
-            RPCResponse::Status(_) => Protocol::Status,
-            RPCResponse::BlocksByRange(_) => Protocol::BlocksByRange,
-            RPCResponse::BlocksByRoot(_) => Protocol::BlocksByRoot,
-            RPCResponse::Pong(_) => Protocol::Ping,
-            RPCResponse::MetaData(_) => Protocol::MetaData,
+            InboundResponse::Status(_) => Protocol::Status,
+            InboundResponse::BlocksByRange(_) => Protocol::BlocksByRange,
+            InboundResponse::BlocksByRoot(_) => Protocol::BlocksByRoot,
+            InboundResponse::Pong(_) => Protocol::Ping,
+            InboundResponse::MetaData(_) => Protocol::MetaData,
         }
     }
 }
@@ -378,18 +368,18 @@ impl std::fmt::Display for StatusMessage {
     }
 }
 
-impl<T: EthSpec> std::fmt::Display for RPCResponse<T> {
+impl<T: EthSpec> std::fmt::Display for InboundResponse<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RPCResponse::Status(status) => write!(f, "{}", status),
-            RPCResponse::BlocksByRange(block) => {
+            InboundResponse::Status(status) => write!(f, "{}", status),
+            InboundResponse::BlocksByRange(block) => {
                 write!(f, "BlocksByRange: Block slot: {}", block.slot())
             }
-            RPCResponse::BlocksByRoot(block) => {
+            InboundResponse::BlocksByRoot(block) => {
                 write!(f, "BlocksByRoot: Block slot: {}", block.slot())
             }
-            RPCResponse::Pong(ping) => write!(f, "Pong: {}", ping.data),
-            RPCResponse::MetaData(metadata) => write!(f, "Metadata: {}", metadata.seq_number()),
+            InboundResponse::Pong(ping) => write!(f, "Pong: {}", ping.data),
+            InboundResponse::MetaData(metadata) => write!(f, "Metadata: {}", metadata.seq_number()),
         }
     }
 }

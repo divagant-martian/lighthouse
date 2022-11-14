@@ -21,7 +21,7 @@ use std::time::Duration;
 use types::{EthSpec, ForkContext};
 
 pub(crate) use handler::HandlerErr;
-pub(crate) use methods::{MetaData, MetaDataV1, MetaDataV2, Ping, RPCCodedResponse, RPCResponse};
+pub(crate) use methods::{MetaData, MetaDataV1, MetaDataV2, Ping, RPCCodedResponse, InboundResponse};
 pub(crate) use protocol::{InboundRequest, RPCProtocol};
 
 pub use handler::SubstreamId;
@@ -74,7 +74,7 @@ pub enum RPCReceived<Id, T: EthSpec> {
     /// The `Id` corresponds to the application given ID of the original request sent to the
     /// peer. The second parameter is a single chunk of a response. These go over *outbound*
     /// connections.
-    Response(Id, RPCResponse<T>),
+    Response(Id, InboundResponse<T>),
     /// Marks a request as completed
     EndOfStream(Id, ResponseTermination),
 }

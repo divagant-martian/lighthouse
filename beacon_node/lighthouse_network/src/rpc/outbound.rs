@@ -19,6 +19,7 @@ use tokio_util::{
     codec::Framed,
     compat::{Compat, FuturesAsyncReadCompatExt},
 };
+use types::SignedBeaconBlock;
 use types::{EthSpec, ForkContext};
 /* Outbound request */
 
@@ -40,6 +41,15 @@ pub enum OutboundRequest<TSpec: EthSpec> {
     BlocksByRoot(BlocksByRootRequest),
     Ping(Ping),
     MetaData(PhantomData<TSpec>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutboundResponse<TSpec: EthSpec> {
+    Status(StatusMessage),
+    BlocksByRange(Arc<SignedBeaconBlock<TSpec>>),
+    BlocksByRoot(Arc<SignedBeaconBlock<TSpec>>),
+    Pong(Ping),
+    MetaData(MetaData<TSpec>),
 }
 
 impl<TSpec: EthSpec> UpgradeInfo for OutboundRequestContainer<TSpec> {

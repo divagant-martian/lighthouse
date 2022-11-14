@@ -6,7 +6,7 @@ use types::{EthSpec, SignedBeaconBlock};
 use crate::rpc::{
     methods::{
         BlocksByRangeRequest, BlocksByRootRequest, OldBlocksByRangeRequest, RPCCodedResponse,
-        RPCResponse, ResponseTermination, StatusMessage,
+        InboundResponse, ResponseTermination, StatusMessage,
     },
     OutboundRequest, SubstreamId,
 };
@@ -72,14 +72,14 @@ impl<TSpec: EthSpec> std::convert::From<Response<TSpec>> for RPCCodedResponse<TS
     fn from(resp: Response<TSpec>) -> RPCCodedResponse<TSpec> {
         match resp {
             Response::BlocksByRoot(r) => match r {
-                Some(b) => RPCCodedResponse::Success(RPCResponse::BlocksByRoot(b)),
+                Some(b) => RPCCodedResponse::Success(InboundResponse::BlocksByRoot(b)),
                 None => RPCCodedResponse::StreamTermination(ResponseTermination::BlocksByRoot),
             },
             Response::BlocksByRange(r) => match r {
-                Some(b) => RPCCodedResponse::Success(RPCResponse::BlocksByRange(b)),
+                Some(b) => RPCCodedResponse::Success(InboundResponse::BlocksByRange(b)),
                 None => RPCCodedResponse::StreamTermination(ResponseTermination::BlocksByRange),
             },
-            Response::Status(s) => RPCCodedResponse::Success(RPCResponse::Status(s)),
+            Response::Status(s) => RPCCodedResponse::Success(InboundResponse::Status(s)),
         }
     }
 }

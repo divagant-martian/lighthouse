@@ -927,7 +927,7 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
             data: *self.network_globals.local_metadata.read().seq_number(),
         };
         trace!(self.log, "Sending Pong"; "request_id" => id.1, "peer_id" => %peer_id);
-        let event = RPCCodedResponse::Success(RPCResponse::Pong(ping));
+        let event = RPCCodedResponse::Success(InboundResponse::Pong(ping));
         self.eth2_rpc_mut().send_response(peer_id, id, event);
     }
 
@@ -940,7 +940,7 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
 
     /// Sends a METADATA response to a peer.
     fn send_meta_data_response(&mut self, id: PeerRequestId, peer_id: PeerId) {
-        let event = RPCCodedResponse::Success(RPCResponse::MetaData(
+        let event = RPCCodedResponse::Success(InboundResponse::MetaData(
             self.network_globals.local_metadata.read().clone(),
         ));
         self.eth2_rpc_mut().send_response(peer_id, id, event);
@@ -1252,26 +1252,26 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
             Ok(RPCReceived::Response(id, resp)) => {
                 match resp {
                     /* Behaviour managed protocols */
-                    RPCResponse::Pong(ping) => {
+                    InboundResponse::Pong(ping) => {
                         self.peer_manager_mut().pong_response(&peer_id, ping.data);
                         None
                     }
-                    RPCResponse::MetaData(meta_data) => {
+                    InboundResponse::MetaData(meta_data) => {
                         self.peer_manager_mut()
                             .meta_data_response(&peer_id, meta_data);
                         None
                     }
                     /* Network propagated protocols */
-                    RPCResponse::Status(msg) => {
+                    InboundResponse::Status(msg) => {
                         // inform the peer manager that we have received a status from a peer
                         self.peer_manager_mut().peer_statusd(&peer_id);
                         // propagate the STATUS message upwards
                         self.build_response(id, peer_id, Response::Status(msg))
                     }
-                    RPCResponse::BlocksByRange(resp) => {
+                    InboundResponse::BlocksByRange(resp) => {
                         self.build_response(id, peer_id, Response::BlocksByRange(Some(resp)))
                     }
-                    RPCResponse::BlocksByRoot(resp) => {
+                    InboundResponse::BlocksByRoot(resp) => {
                         self.build_response(id, peer_id, Response::BlocksByRoot(Some(resp)))
                     }
                 }
