@@ -47,19 +47,23 @@ const MAX_BATCH_PROCESSING_ATTEMPTS: u8 = 10;
 /// Custom configuration for the batch object.
 struct BackFillBatchConfig {}
 
-impl BatchConfig for BackFillBatchConfig {
+impl<T: EthSpec> BatchConfig<Arc<SignedBeaconBlock<T>>> for BackFillBatchConfig {
     fn max_batch_download_attempts() -> u8 {
         MAX_BATCH_DOWNLOAD_ATTEMPTS
     }
     fn max_batch_processing_attempts() -> u8 {
         MAX_BATCH_PROCESSING_ATTEMPTS
     }
-    fn batch_attempt_hash<T: EthSpec>(blocks: &[Arc<SignedBeaconBlock<T>>]) -> u64 {
+    fn batch_attempt_hash(blocks: &[Arc<SignedBeaconBlock<T>>]) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         blocks.hash(&mut hasher);
         hasher.finish()
+    }
+
+    fn block_slot(block: &Arc<SignedBeaconBlock<T>>) -> types::Slot {
+        block.slot()
     }
 }
 
@@ -115,7 +119,10 @@ pub struct BackFillSync<T: BeaconChainTypes> {
     last_batch_downloaded: bool,
 
     /// Sorted map of batches undergoing some kind of processing.
-    batches: BTreeMap<BatchId, BatchInfo<T::EthSpec, BackFillBatchConfig>>,
+    batches: BTreeMap<
+        BatchId,
+        BatchInfo<T::EthSpec, Arc<SignedBeaconBlock<T::EthSpec>>, BackFillBatchConfig>,
+    >,
 
     /// List of peers we are currently awaiting a response for.
     active_requests: HashMap<PeerId, HashSet<BatchId>>,
@@ -1076,7 +1083,11 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         // only request batches up to the buffer size limit
         // NOTE: we don't count batches in the AwaitingValidation state, to prevent stalling sync
         // if the current processing window is contained in a long range of skip slots.
-        let in_buffer = |batch: &BatchInfo<T::EthSpec, BackFillBatchConfig>| {
+        let in_buffer = |batch: &BatchInfo<
+            T::EthSpec,
+            Arc<SignedBeaconBlock<T::EthSpec>>,
+            BackFillBatchConfig,
+        >| {
             matches!(
                 batch.state(),
                 BatchState::Downloading(..) | BatchState::AwaitingProcessing(..)

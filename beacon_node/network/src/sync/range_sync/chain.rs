@@ -70,7 +70,7 @@ pub struct SyncingChain<T: BeaconChainTypes> {
     pub target_head_root: Hash256,
 
     /// Sorted map of batches undergoing some kind of processing.
-    batches: BTreeMap<BatchId, BatchInfo<T::EthSpec>>,
+    batches: BTreeMap<BatchId, BatchInfo<T::EthSpec, Arc<SignedBeaconBlock<T::EthSpec>>>>,
 
     /// The peers that agree on the `target_head_slot` and `target_head_root` as a canonical chain
     /// and thus available to download this chain from, as well as the batches we are currently
@@ -1037,7 +1037,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
         // only request batches up to the buffer size limit
         // NOTE: we don't count batches in the AwaitingValidation state, to prevent stalling sync
         // if the current processing window is contained in a long range of skip slots.
-        let in_buffer = |batch: &BatchInfo<T::EthSpec>| {
+        let in_buffer = |batch: &BatchInfo<T::EthSpec, Arc<SignedBeaconBlock<T::EthSpec>>>| {
             matches!(
                 batch.state(),
                 BatchState::Downloading(..) | BatchState::AwaitingProcessing(..)

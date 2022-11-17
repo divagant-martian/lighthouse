@@ -27,7 +27,7 @@ pub enum Batch<
 }
 
 /// Allows customisation of the above constants used in other sync methods such as BackFillSync.
-pub trait BatchConfig<Item> {
+pub trait BatchConfig<BlockTy> {
     /// The maximum batch download attempts.
     fn max_batch_download_attempts() -> u8;
     /// The max batch processing attempts.
@@ -59,7 +59,9 @@ pub trait BatchConfig<Item> {
     /// Note that simpler hashing functions considered in the past (hash of first block, hash of last
     /// block, number of received blocks) are not good enough to differentiate attempts. For this
     /// reason, we hash the complete set of blocks both in RangeSync and BackFillSync.
-    fn batch_attempt_hash(blocks: &[Item]) -> u64;
+    fn batch_attempt_hash(blocks: &[BlockTy]) -> u64;
+
+    fn block_slot(block: &BlockTy) -> Slot;
 }
 
 pub struct RangeSyncBatchConfig {}
@@ -76,6 +78,10 @@ impl<T: EthSpec> BatchConfig<Block<T>> for RangeSyncBatchConfig {
         blocks.hash(&mut hasher);
         hasher.finish()
     }
+
+    fn block_slot(block: &Block<T>) -> Slot {
+        block.slot()
+    }
 }
 
 impl BatchConfig<Eip4844BlockBlob> for RangeSyncBatchConfig {
@@ -87,6 +93,10 @@ impl BatchConfig<Eip4844BlockBlob> for RangeSyncBatchConfig {
     }
     fn batch_attempt_hash(blocks: &[Eip4844BlockBlob]) -> u64 {
         42
+    }
+
+    fn block_slot(block: &Eip4844BlockBlob) -> Slot {
+        Slot::new(28)
     }
 }
 
@@ -107,7 +117,10 @@ pub enum BatchProcessingResult {
 }
 
 /// A segment of a chain.
-pub struct BatchInfo<T: EthSpec, Item, B: BatchConfig<Item> = RangeSyncBatchConfig> {
+pub struct BatchInfo<T: EthSpec, BlockTy, B = RangeSyncBatchConfig>
+where
+    B: BatchConfig<BlockTy>,
+{
     /// Start slot of the batch.
     start_slot: Slot,
     /// End slot of the batch.
@@ -119,19 +132,19 @@ pub struct BatchInfo<T: EthSpec, Item, B: BatchConfig<Item> = RangeSyncBatchConf
     /// The number of download retries this batch has undergone due to a failed request.
     failed_download_attempts: Vec<PeerId>,
     /// State of the batch.
-    state: BatchState<Item>,
+    state: BatchState<BlockTy>,
     /// Pin the generic
     marker: std::marker::PhantomData<(T, B)>,
 }
 
 /// Current state of a batch
-pub enum BatchState<Item> {
+pub enum BatchState<BlockTy> {
     /// The batch has failed either downloading or processing, but can be requested again.
     AwaitingDownload,
     /// The batch is being downloaded.
-    Downloading(PeerId, Vec<Item>, Id),
+    Downloading(PeerId, Vec<BlockTy>, Id),
     /// The batch has been completely downloaded and is ready for processing.
-    AwaitingProcessing(PeerId, Vec<Item>),
+    AwaitingProcessing(PeerId, Vec<BlockTy>),
     /// The batch is being processed.
     Processing(Attempt),
     /// The batch was successfully processed and is waiting to be validated.
@@ -147,14 +160,14 @@ pub enum BatchState<Item> {
     Failed,
 }
 
-impl<Item> BatchState<Item> {
+impl<BlockTy> BatchState<BlockTy> {
     /// Helper function for poisoning a state.
-    pub fn poison(&mut self) -> BatchState<Item> {
+    pub fn poison(&mut self) -> BatchState<BlockTy> {
         std::mem::replace(self, BatchState::Poisoned)
     }
 }
 
-impl<T: EthSpec, Item, B: BatchConfig<Item>> BatchInfo<T, Item, B> {
+impl<T: EthSpec, BlockTy, B: BatchConfig<BlockTy>> BatchInfo<T, BlockTy, B> {
     /// Batches are downloaded excluding the first block of the epoch assuming it has already been
     /// downloaded.
     ///
@@ -238,7 +251,7 @@ impl<T: EthSpec, Item, B: BatchConfig<Item>> BatchInfo<T, Item, B> {
         }
     }
 
-    pub fn state(&self) -> &BatchState<Item> {
+    pub fn state(&self) -> &BatchState<BlockTy> {
         &self.state
     }
 
@@ -247,7 +260,7 @@ impl<T: EthSpec, Item, B: BatchConfig<Item>> BatchInfo<T, Item, B> {
     }
 
     /// Adds a block to a downloading batch.
-    pub fn add_item(&mut self, item: Item) -> Result<(), WrongState> {
+    pub fn add_block(&mut self, item: BlockTy) -> Result<(), WrongState> {
         match self.state.poison() {
             BatchState::Downloading(peer, mut blocks, req_id) => {
                 blocks.push(item);
@@ -277,9 +290,9 @@ impl<T: EthSpec, Item, B: BatchConfig<Item>> BatchInfo<T, Item, B> {
         match self.state.poison() {
             BatchState::Downloading(peer, blocks, _request_id) => {
                 // verify that blocks are in range
-                if let Some(last_slot) = blocks.last().map(|b| b.slot()) {
+                if let Some(last_slot) = blocks.last().map(|b| B::block_slot(b)) {
                     // the batch is non-empty
-                    let first_slot = blocks[0].slot();
+                    let first_slot = B::block_slot(&blocks[0]);
 
                     let failed_range = if first_slot < self.start_slot {
                         Some((self.start_slot, first_slot))
@@ -379,10 +392,10 @@ impl<T: EthSpec, Item, B: BatchConfig<Item>> BatchInfo<T, Item, B> {
         }
     }
 
-    pub fn start_processing(&mut self) -> Result<Vec<Item>, WrongState> {
+    pub fn start_processing(&mut self) -> Result<Vec<BlockTy>, WrongState> {
         match self.state.poison() {
             BatchState::AwaitingProcessing(peer, blocks) => {
-                self.state = BatchState::Processing(Attempt::new::<B, T>(peer, &blocks));
+                self.state = BatchState::Processing(Attempt::new::<BlockTy, B, T>(peer, &blocks));
                 Ok(blocks)
             }
             BatchState::Poisoned => unreachable!("Poisoned batch"),
@@ -498,13 +511,16 @@ pub struct Attempt {
 }
 
 impl Attempt {
-    fn new<Item, B: BatchConfig<Item>, T: EthSpec>(peer_id: PeerId, blocks: &[Block<T>]) -> Self {
+    fn new<BlockTy, B: BatchConfig<BlockTy>, T: EthSpec>(
+        peer_id: PeerId,
+        blocks: &[BlockTy],
+    ) -> Self {
         let hash = B::batch_attempt_hash(blocks);
         Attempt { peer_id, hash }
     }
 }
 
-impl<T: EthSpec, Item, B: BatchConfig<Item>> slog::KV for &mut BatchInfo<T, Item, B> {
+impl<T: EthSpec, BlockTy, B: BatchConfig<BlockTy>> slog::KV for &mut BatchInfo<T, BlockTy, B> {
     fn serialize(
         &self,
         record: &slog::Record,
@@ -514,7 +530,7 @@ impl<T: EthSpec, Item, B: BatchConfig<Item>> slog::KV for &mut BatchInfo<T, Item
     }
 }
 
-impl<T: EthSpec, Item, B: BatchConfig<Item>> slog::KV for BatchInfo<T, Item, B> {
+impl<T: EthSpec, BlockTy, B: BatchConfig<BlockTy>> slog::KV for BatchInfo<T, BlockTy, B> {
     fn serialize(
         &self,
         record: &slog::Record,
@@ -536,7 +552,7 @@ impl<T: EthSpec, Item, B: BatchConfig<Item>> slog::KV for BatchInfo<T, Item, B> 
     }
 }
 
-impl<Item> std::fmt::Debug for BatchState<Item> {
+impl<BlockTy> std::fmt::Debug for BatchState<BlockTy> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BatchState::Processing(Attempt {
