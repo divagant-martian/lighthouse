@@ -54,7 +54,7 @@ impl<T: EthSpec> BatchConfig<Arc<SignedBeaconBlock<T>>> for BackFillBatchConfig 
     fn max_batch_processing_attempts() -> u8 {
         MAX_BATCH_PROCESSING_ATTEMPTS
     }
-    fn batch_attempt_hash(blocks: &[Arc<SignedBeaconBlock<T>>]) -> u64 {
+    fn block_batch_attempt_hash(blocks: &[Arc<SignedBeaconBlock<T>>]) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();

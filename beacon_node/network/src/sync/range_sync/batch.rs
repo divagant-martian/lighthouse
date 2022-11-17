@@ -16,14 +16,13 @@ const MAX_BATCH_DOWNLOAD_ATTEMPTS: u8 = 5;
 /// after `MAX_BATCH_PROCESSING_ATTEMPTS` times, it is considered faulty.
 const MAX_BATCH_PROCESSING_ATTEMPTS: u8 = 3;
 
-/// A batch that can be either only blocks or blocks and blobs
-pub enum Batch<T: EthSpec, Config: BatchConfig<Block<T>> + BatchConfig<Eip4844BlockBlob>> {
-    BlockBatch(BatchInfo<T, Block<T>, Config>),
-    BlockBlobBatch(BatchInfo<T, Eip4844BlockBlob, Config>),
+pub enum BlockEnum<T: EthSpec> {
+    Block(Block<T>),
+    Blob(Eip4844BlockBlob),
 }
 
 /// Allows customisation of the above constants used in other sync methods such as BackFillSync.
-pub trait BatchConfig<BlockTy> {
+pub trait BatchConfig<T: EthSpec> {
     /// The maximum batch download attempts.
     fn max_batch_download_attempts() -> u8;
     /// The max batch processing attempts.
@@ -55,44 +54,39 @@ pub trait BatchConfig<BlockTy> {
     /// Note that simpler hashing functions considered in the past (hash of first block, hash of last
     /// block, number of received blocks) are not good enough to differentiate attempts. For this
     /// reason, we hash the complete set of blocks both in RangeSync and BackFillSync.
-    fn batch_attempt_hash(blocks: &[BlockTy]) -> u64;
+    fn block_batch_attempt_hash(blocks: &[Block<T>]) -> u64;
 
-    fn block_slot(block: &BlockTy) -> Slot;
+    /// Refer to the docs of [`BatchConfig::block_batch_attempt_hash`]
+    fn block_and_blob_batch_attempt_hash(blocks: &[Eip4844BlockBlob]) -> u64;
+
+    /// Getting the slot of a block or a blob
+    fn block_slot(block: &BlockEnum<T>) -> Slot;
 }
 
 pub struct RangeSyncBatchConfig {}
 
-impl<T: EthSpec> BatchConfig<Block<T>> for RangeSyncBatchConfig {
+impl<T: EthSpec> BatchConfig<T> for RangeSyncBatchConfig {
     fn max_batch_download_attempts() -> u8 {
         MAX_BATCH_DOWNLOAD_ATTEMPTS
     }
     fn max_batch_processing_attempts() -> u8 {
         MAX_BATCH_PROCESSING_ATTEMPTS
     }
-    fn batch_attempt_hash(blocks: &[Block<T>]) -> u64 {
+    fn block_batch_attempt_hash(blocks: &[Block<T>]) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         blocks.hash(&mut hasher);
         hasher.finish()
     }
 
-    fn block_slot(block: &Block<T>) -> Slot {
-        block.slot()
-    }
-}
-
-impl BatchConfig<Eip4844BlockBlob> for RangeSyncBatchConfig {
-    fn max_batch_download_attempts() -> u8 {
-        MAX_BATCH_DOWNLOAD_ATTEMPTS
-    }
-    fn max_batch_processing_attempts() -> u8 {
-        MAX_BATCH_PROCESSING_ATTEMPTS
-    }
-    fn batch_attempt_hash(blocks: &[Eip4844BlockBlob]) -> u64 {
+    fn block_and_blob_batch_attempt_hash(blocks: &[Eip4844BlockBlob]) -> u64 {
         42
     }
 
-    fn block_slot(block: &Eip4844BlockBlob) -> Slot {
-        Slot::new(28)
+    fn block_slot(block: &BlockEnum<T>) -> Slot {
+        match block {
+            BlockEnum::Block(block) => block.slot(),
+            BlockEnum::Blob(_) => 32,
+        }
     }
 }
 
@@ -115,7 +109,7 @@ pub enum BatchProcessingResult {
 /// A segment of a chain.
 pub struct BatchInfo<T: EthSpec, BlockTy, B = RangeSyncBatchConfig>
 where
-    B: BatchConfig<BlockTy>,
+    B: BatchConfig<T>,
 {
     /// Start slot of the batch.
     start_slot: Slot,
@@ -163,7 +157,7 @@ impl<BlockTy> BatchState<BlockTy> {
     }
 }
 
-impl<T: EthSpec, BlockTy, B: BatchConfig<BlockTy>> BatchInfo<T, BlockTy, B> {
+impl<T: EthSpec, BlockTy, B: BatchConfig<T>> BatchInfo<T, BlockTy, B> {
     /// Batches are downloaded excluding the first block of the epoch assuming it has already been
     /// downloaded.
     ///
@@ -474,20 +468,9 @@ impl<T: EthSpec, BlockTy, B: BatchConfig<BlockTy>> BatchInfo<T, BlockTy, B> {
     }
 }
 
-impl<T: EthSpec, B: BatchConfig<Block<T>>> BatchInfo<T, Block<T>, B> {
+impl<T: EthSpec, B: BatchConfig<T>> BatchInfo<T, Block<T>, B> {
     /// Returns a BlocksByRange request associated with the batch.
     pub fn to_blocks_by_range_request(&self) -> BlocksByRangeRequest {
-        BlocksByRangeRequest {
-            start_slot: self.start_slot.into(),
-            count: self.end_slot.sub(self.start_slot).into(),
-        }
-    }
-}
-
-impl<T: EthSpec, B: BatchConfig<Eip4844BlockBlob>> BatchInfo<T, Eip4844BlockBlob, B> {
-    /// Returns a BlocksByRange request associated with the batch.
-    // Here we can just return two requests if we need to, and/or change the type of the request.
-    pub fn to_blocks_and_blobs_by_range_request(&self) -> BlocksByRangeRequest {
         BlocksByRangeRequest {
             start_slot: self.start_slot.into(),
             count: self.end_slot.sub(self.start_slot).into(),
@@ -507,16 +490,13 @@ pub struct Attempt {
 }
 
 impl Attempt {
-    fn new<BlockTy, B: BatchConfig<BlockTy>, T: EthSpec>(
-        peer_id: PeerId,
-        blocks: &[BlockTy],
-    ) -> Self {
-        let hash = B::batch_attempt_hash(blocks);
+    fn new<BlockTy, B: BatchConfig<T>, T: EthSpec>(peer_id: PeerId, blocks: &[BlockTy]) -> Self {
+        let hash = B::block_batch_attempt_hash(blocks);
         Attempt { peer_id, hash }
     }
 }
 
-impl<T: EthSpec, BlockTy, B: BatchConfig<BlockTy>> slog::KV for &mut BatchInfo<T, BlockTy, B> {
+impl<T: EthSpec, BlockTy, B: BatchConfig<T>> slog::KV for &mut BatchInfo<T, BlockTy, B> {
     fn serialize(
         &self,
         record: &slog::Record,
@@ -526,7 +506,7 @@ impl<T: EthSpec, BlockTy, B: BatchConfig<BlockTy>> slog::KV for &mut BatchInfo<T
     }
 }
 
-impl<T: EthSpec, BlockTy, B: BatchConfig<BlockTy>> slog::KV for BatchInfo<T, BlockTy, B> {
+impl<T: EthSpec, BlockTy, B: BatchConfig<T>> slog::KV for BatchInfo<T, BlockTy, B> {
     fn serialize(
         &self,
         record: &slog::Record,

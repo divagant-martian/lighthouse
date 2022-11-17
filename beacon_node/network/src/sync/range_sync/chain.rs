@@ -1,4 +1,4 @@
-use super::batch::{BatchInfo, BatchProcessingResult, BatchState};
+use super::batch::{BatchInfo, BatchProcessingResult, BatchState, BlockEnum};
 use crate::beacon_processor::{ChainSegmentProcessId, WorkEvent as BeaconWorkEvent};
 use crate::sync::{
     manager::Id, network_context::SyncNetworkContext, BatchOperationOutcome, BatchProcessResult,
@@ -70,7 +70,7 @@ pub struct SyncingChain<T: BeaconChainTypes> {
     pub target_head_root: Hash256,
 
     /// Sorted map of batches undergoing some kind of processing.
-    batches: BTreeMap<BatchId, BatchInfo<T::EthSpec, Arc<SignedBeaconBlock<T::EthSpec>>>>,
+    batches: BTreeMap<BatchId, BatchInfo<T::EthSpec, BlockEnum<T::EthSpec>>>,
 
     /// The peers that agree on the `target_head_slot` and `target_head_root` as a canonical chain
     /// and thus available to download this chain from, as well as the batches we are currently
