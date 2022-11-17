@@ -7,7 +7,7 @@ use std::ops::Sub;
 use std::sync::Arc;
 use types::{Epoch, EthSpec, SignedBeaconBlock, Slot};
 
-type Block<T: EthSpec> = Arc<SignedBeaconBlock<T>>;
+type Block<T> = Arc<SignedBeaconBlock<T>>;
 
 /// The number of times to retry a batch before it is considered failed.
 const MAX_BATCH_DOWNLOAD_ATTEMPTS: u8 = 5;
@@ -17,13 +17,9 @@ const MAX_BATCH_DOWNLOAD_ATTEMPTS: u8 = 5;
 const MAX_BATCH_PROCESSING_ATTEMPTS: u8 = 3;
 
 /// A batch that can be either only blocks or blocks and blobs
-pub enum Batch<
-    T: EthSpec,
-    BlockConfig: BatchConfig<Block<T>>,
-    BlockBlobConfig: BatchConfig<Eip4844BlockBlob>,
-> {
-    BlockBatch(BatchInfo<T, Block<T>, BlockConfig>),
-    BlockBlobBatch(BatchInfo<T, Eip4844BlockBlob, BlockBlobConfig>),
+pub enum Batch<T: EthSpec, Config: BatchConfig<Block<T>> + BatchConfig<Eip4844BlockBlob>> {
+    BlockBatch(BatchInfo<T, Block<T>, Config>),
+    BlockBlobBatch(BatchInfo<T, Eip4844BlockBlob, Config>),
 }
 
 /// Allows customisation of the above constants used in other sync methods such as BackFillSync.
