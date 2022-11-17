@@ -66,6 +66,17 @@ pub const SLOT_IMPORT_TOLERANCE: usize = 32;
 
 pub type Id = u32;
 
+pub struct BlobSideCar {}
+pub enum BlockTy<T: EthSpec> {
+    Block {
+        block: Arc<SignedBeaconBlock<T>>,
+    },
+    BlockAndBlob {
+        block: Arc<SignedBeaconBlock<T>>,
+        blob_sidecar: BlobSideCar,
+    },
+}
+
 /// Id of rpc requests sent by sync to the network.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub enum RequestId {
