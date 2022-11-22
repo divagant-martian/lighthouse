@@ -123,8 +123,8 @@ pub struct BackFillSync<T: BeaconChainTypes> {
     /// The current processing batch, if any.
     current_processing_batch: Option<BatchId>,
 
-    /// Batches validated by this chain.
-    validated_batches: u64,
+    /// Total slots validated by this chain.
+    validated_slots: u64,
 
     /// We keep track of peers that are participating in the backfill sync. Unlike RangeSync,
     /// BackFillSync uses all synced peers to download the chain from. If BackFillSync fails, we don't
@@ -162,17 +162,24 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         let (state, current_start) = if let Some(anchor_info) = beacon_chain.store.get_anchor_info()
         {
             if anchor_info.block_backfill_complete() {
-                (BackFillState::Completed, Epoch::new(0))
+                (
+                    BackFillState::Completed,
+                    Epoch::new(0).start_slot(T::EthSpec::slots_per_epoch()),
+                )
             } else {
                 (
                     BackFillState::Paused,
                     anchor_info
                         .oldest_block_slot
-                        .epoch(T::EthSpec::slots_per_epoch()),
+                        .epoch(T::EthSpec::slots_per_epoch())
+                        .start_slot(T::EthSpec::slots_per_epoch()),
                 )
             }
         } else {
-            (BackFillState::NotRequired, Epoch::new(0))
+            (
+                BackFillState::NotRequired,
+                Epoch::new(0).start_slot(T::EthSpec::slots_per_epoch()),
+            )
         };
 
         let bfs = BackFillSync {
@@ -184,7 +191,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
             to_be_downloaded: current_start,
             network_globals,
             current_processing_batch: None,
-            validated_batches: 0,
+            validated_slots: 0,
             participating_peers: HashSet::new(),
             restart_failed_sync: false,
             beacon_chain,
@@ -199,7 +206,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
     /// Pauses the backfill sync if it's currently syncing.
     pub fn pause(&mut self) {
         if let BackFillState::Syncing = self.state() {
-            debug!(self.log, "Backfill sync paused"; "processed_epochs" => self.validated_batches, "to_be_processed" => self.current_start);
+            debug!(self.log, "Backfill sync paused"; "processed_epochs" => self.validated_slots, "to_be_processed" => self.current_start);
             self.set_state(BackFillState::Paused);
         }
     }
@@ -281,13 +288,10 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         }
 
         Ok(SyncStart::Syncing {
-            completed: (self.validated_batches
+            completed: (self.validated_slots
                 * BACKFILL_EPOCHS_PER_BATCH
                 * T::EthSpec::slots_per_epoch()) as usize,
-            remaining: self
-                .current_start
-                .start_slot(T::EthSpec::slots_per_epoch())
-                .as_usize(),
+            remaining: self.current_start.as_usize(),
         })
     }
 
@@ -629,7 +633,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                 // check if the chain has completed syncing
                 if self.check_completed() {
                     // chain is completed
-                    info!(self.log, "Backfill sync completed"; "blocks_processed" => self.validated_batches * T::EthSpec::slots_per_epoch());
+                    info!(self.log, "Backfill sync completed"; "blocks_processed" => self.validated_slots * T::EthSpec::slots_per_epoch());
                     self.set_state(BackFillState::Completed);
                     Ok(ProcessResult::SyncCompleted)
                 } else {
@@ -758,9 +762,9 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
     ///
     /// If a previous batch has been validated and it had been re-processed, penalize the original
     /// peer.
-    fn advance_chain(&mut self, network: &mut SyncNetworkContext<T>, validating_epoch: Epoch) {
+    fn advance_chain(&mut self, network: &mut SyncNetworkContext<T>, validating_slot: BatchId) {
         // make sure this epoch produces an advancement
-        if validating_epoch >= self.current_start {
+        if validating_slot >= self.current_start {
             return;
         }
 
@@ -769,10 +773,10 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         // `BACKFILL_EPOCHS_PER_BATCH` as `split_off` is inclusive.
         let removed_batches = self
             .batches
-            .split_off(&(validating_epoch + BACKFILL_EPOCHS_PER_BATCH));
+            .split_off(&(validating_slot + BACKFILL_EPOCHS_PER_BATCH));
 
         for (id, batch) in removed_batches.into_iter() {
-            self.validated_batches = self.validated_batches.saturating_add(1);
+            self.validated_slots = self.validated_slots.saturating_add(1);
             // only for batches awaiting validation can we be sure the last attempt is
             // right, and thus, that any different attempt is wrong
             match batch.state() {
@@ -835,15 +839,15 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
             }
         }
 
-        self.processing_target = self.processing_target.min(validating_epoch);
-        self.current_start = validating_epoch;
-        self.to_be_downloaded = self.to_be_downloaded.min(validating_epoch);
+        self.processing_target = self.processing_target.min(validating_slot);
+        self.current_start = validating_slot;
+        self.to_be_downloaded = self.to_be_downloaded.min(validating_slot);
         if self.batches.contains_key(&self.to_be_downloaded) {
             // if a chain is advanced by Range beyond the previous `self.to_be_downloaded`, we
             // won't have this batch, so we need to request it.
             self.to_be_downloaded -= BACKFILL_EPOCHS_PER_BATCH;
         }
-        debug!(self.log, "Backfill advanced"; "validated_epoch" => validating_epoch, "processing_target" => self.processing_target);
+        debug!(self.log, "Backfill advanced"; "validated_epoch" => validating_slot, "processing_target" => self.processing_target);
     }
 
     /// An invalid batch has been received that could not be processed, but that can be retried.
@@ -1107,7 +1111,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                 self.include_next_batch()
             }
             Entry::Vacant(entry) => {
-                entry.insert(BatchInfo::new(&batch_id, BACKFILL_EPOCHS_PER_BATCH));
+                entry.insert(BatchInfo::new(batch_id, BACKFILL_EPOCHS_PER_BATCH));
                 if batch_id == 0 {
                     self.last_batch_downloaded = true;
                 }
@@ -1130,7 +1134,8 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
             } else {
                 self.current_start = anchor_info
                     .oldest_block_slot
-                    .epoch(T::EthSpec::slots_per_epoch());
+                    .epoch(T::EthSpec::slots_per_epoch())
+                    .start_slot(T::EthSpec::slots_per_epoch());
                 Ok(())
             }
         } else {

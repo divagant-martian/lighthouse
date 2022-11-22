@@ -9,4 +9,4 @@ mod peer_sync_info;
 mod range_sync;
 
 pub use manager::{BatchProcessResult, SyncMessage};
-pub use range_sync::{BatchOperationOutcome, ChainId};
+pub use range_sync::{BatchId, BatchOperationOutcome, ChainId};

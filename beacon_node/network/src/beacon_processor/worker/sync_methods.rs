@@ -6,7 +6,7 @@ use crate::beacon_processor::worker::FUTURE_SLOT_TOLERANCE;
 use crate::beacon_processor::DuplicateCache;
 use crate::metrics;
 use crate::sync::manager::{BlockProcessType, SyncMessage};
-use crate::sync::{BatchProcessResult, ChainId};
+use crate::sync::{BatchId, BatchProcessResult, ChainId};
 use beacon_chain::CountUnrealized;
 use beacon_chain::{
     BeaconChainError, BeaconChainTypes, BlockError, ChainSegmentResult, HistoricalBlockError,
@@ -15,15 +15,15 @@ use lighthouse_network::PeerAction;
 use slog::{debug, error, info, warn};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use types::{Epoch, Hash256, SignedBeaconBlock};
+use types::{Hash256, SignedBeaconBlock};
 
 /// Id associated to a batch processing request, either a sync batch or a parent lookup.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChainSegmentProcessId {
     /// Processing Id of a range syncing batch.
-    RangeBatchId(ChainId, Epoch, CountUnrealized),
+    RangeBatchId(ChainId, BatchId, CountUnrealized),
     /// Processing ID for a backfill syncing batch.
-    BackSyncBatchId(Epoch),
+    BackSyncBatchId(BatchId),
     /// Processing Id of the parent lookup of a block.
     ParentLookup(Hash256),
 }

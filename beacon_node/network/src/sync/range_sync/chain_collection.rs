@@ -224,7 +224,7 @@ impl<T: BeaconChainTypes, C: BlockStorage> ChainCollection<T, C> {
                     .ok_or("Finalized syncing chain not found")?;
                 Ok(Some((
                     RangeSyncType::Finalized,
-                    chain.start_epoch.start_slot(T::EthSpec::slots_per_epoch()),
+                    chain.start_slot.start_slot(T::EthSpec::slots_per_epoch()),
                     chain.target_head_slot,
                 )))
             }
@@ -235,7 +235,7 @@ impl<T: BeaconChainTypes, C: BlockStorage> ChainCollection<T, C> {
                         .head_chains
                         .get(id)
                         .ok_or("Head syncing chain not found")?;
-                    let start = chain.start_epoch.start_slot(T::EthSpec::slots_per_epoch());
+                    let start = chain.start_slot.start_slot(T::EthSpec::slots_per_epoch());
                     let target = chain.target_head_slot;
 
                     range = range

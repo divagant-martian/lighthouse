@@ -51,7 +51,7 @@ pub struct KeepChain;
 
 /// A chain identifier
 pub type ChainId = u64;
-pub type BatchId = Epoch;
+pub type BatchId = Slot;
 
 /// A chain of blocks that need to be downloaded. Peers who claim to contain the target head
 /// root are grouped into the peer pool and queried for batches when downloading the
@@ -61,7 +61,7 @@ pub struct SyncingChain<T: BeaconChainTypes> {
     id: ChainId,
 
     /// The start of the chain segment. Any epoch previous to this one has been validated.
-    pub start_epoch: Epoch,
+    pub start_slot: Slot,
 
     /// The target head slot.
     pub target_head_slot: Slot,
@@ -77,10 +77,10 @@ pub struct SyncingChain<T: BeaconChainTypes> {
     /// requesting.
     peers: FnvHashMap<PeerId, HashSet<BatchId>>,
 
-    /// Starting epoch of the next batch that needs to be downloaded.
+    /// Starting slot of the next batch that needs to be downloaded.
     to_be_downloaded: BatchId,
 
-    /// Starting epoch of the batch that needs to be processed next.
+    /// Starting slot of the batch that needs to be processed next.
     /// This is incremented as the chain advances.
     processing_target: BatchId,
 
@@ -124,7 +124,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
 
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        start_epoch: Epoch,
+        start_slot: Slot,
         target_head_slot: Slot,
         target_head_root: Hash256,
         peer_id: PeerId,
@@ -138,13 +138,13 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
 
         SyncingChain {
             id,
-            start_epoch,
+            start_slot,
             target_head_slot,
             target_head_root,
             batches: BTreeMap::new(),
             peers,
-            to_be_downloaded: start_epoch,
-            processing_target: start_epoch,
+            to_be_downloaded: start_slot,
+            processing_target: start_slot,
             optimistic_start: None,
             attempted_optimistic_starts: HashSet::default(),
             state: ChainSyncingState::Stopped,
@@ -211,10 +211,8 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
 
     /// Returns the latest slot number that has been processed.
     fn current_processed_slot(&self) -> Slot {
-        // the last slot we processed was included in the previous batch, and corresponds to the
-        // first slot of the current target epoch
-        self.processing_target
-            .start_slot(T::EthSpec::slots_per_epoch())
+        // Any batch previous to this one ended in the slot previous the starting one from this
+        self.processing_target - 1
     }
 
     /// A block has been received for a batch on this chain.
@@ -609,20 +607,14 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
     ///
     /// If a previous batch has been validated and it had been re-processed, penalize the original
     /// peer.
-    fn advance_chain(&mut self, network: &mut SyncNetworkContext<T>, validating_epoch: Epoch) {
+    fn advance_chain(&mut self, network: &mut SyncNetworkContext<T>, validating_slot: Slot) {
         // make sure this epoch produces an advancement
-        if validating_epoch <= self.start_epoch {
-            return;
-        }
-
-        // safety check for batch boundaries
-        if validating_epoch % EPOCHS_PER_BATCH != self.start_epoch % EPOCHS_PER_BATCH {
-            crit!(self.log, "Validating Epoch is not aligned");
+        if validating_slot <= self.start_slot {
             return;
         }
 
         // batches in the range [BatchId, ..) (not yet validated)
-        let remaining_batches = self.batches.split_off(&validating_epoch);
+        let remaining_batches = self.batches.split_off(&validating_slot);
         // batches less than `validating_epoch`
         let removed_batches = std::mem::replace(&mut self.batches, remaining_batches);
 
@@ -688,22 +680,22 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
             }
         }
 
-        self.processing_target = self.processing_target.max(validating_epoch);
-        let old_start = self.start_epoch;
-        self.start_epoch = validating_epoch;
-        self.to_be_downloaded = self.to_be_downloaded.max(validating_epoch);
+        self.processing_target = self.processing_target.max(validating_slot);
+        let old_start = self.start_slot;
+        self.start_slot = validating_slot;
+        self.to_be_downloaded = self.to_be_downloaded.max(validating_slot);
         if self.batches.contains_key(&self.to_be_downloaded) {
             // if a chain is advanced by Range beyond the previous `self.to_be_downloaded`, we
             // won't have this batch, so we need to request it.
             self.to_be_downloaded += EPOCHS_PER_BATCH;
         }
         if let Some(epoch) = self.optimistic_start {
-            if epoch <= validating_epoch {
+            if epoch <= validating_slot {
                 self.optimistic_start = None;
             }
         }
         debug!(self.log, "Chain advanced"; "previous_start" => old_start,
-            "new_start" => self.start_epoch, "processing_target" => self.processing_target);
+            "new_start" => self.start_slot, "processing_target" => self.processing_target);
     }
 
     /// An invalid batch has been received that could not be processed, but that can be retried.
@@ -753,7 +745,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
 
         // no batch maxed out it process attempts, so now the chain's volatile progress must be
         // reset
-        self.processing_target = self.start_epoch;
+        self.processing_target = self.start_slot;
 
         for id in redownload_queue {
             self.retry_batch_download(network, id)?;
@@ -779,7 +771,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
         // to avoid dropping local progress, we advance the chain wrt its batch boundaries. This
         let align = |epoch| {
             // start_epoch + (number of batches in between)*length_of_batch
-            self.start_epoch + ((epoch - self.start_epoch) / EPOCHS_PER_BATCH) * EPOCHS_PER_BATCH
+            self.start_slot + ((epoch - self.start_slot) / EPOCHS_PER_BATCH) * EPOCHS_PER_BATCH
         };
         // get the *aligned* epoch that produces a batch containing the `local_finalized_epoch`
         let validating_epoch = align(local_finalized_epoch);
@@ -1088,7 +1080,7 @@ impl<T: BeaconChainTypes> slog::KV for SyncingChain<T> {
     ) -> slog::Result {
         use slog::Value;
         serializer.emit_u64("id", self.id)?;
-        Value::serialize(&self.start_epoch, record, "from", serializer)?;
+        Value::serialize(&self.start_slot, record, "from", serializer)?;
         Value::serialize(
             &self.target_head_slot.epoch(T::EthSpec::slots_per_epoch()),
             record,

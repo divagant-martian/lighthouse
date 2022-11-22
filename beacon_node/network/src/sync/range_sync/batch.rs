@@ -139,8 +139,7 @@ impl<T: EthSpec, B: BatchConfig> BatchInfo<T, B> {
     /// Epoch boundary |                                   |
     ///  ... | 30 | 31 | 32 | 33 | 34 | ... | 61 | 62 | 63 | 64 | 65 |
     ///       Batch 1       |              Batch 2              |  Batch 3
-    pub fn new(start_epoch: &Epoch, num_of_epochs: u64) -> Self {
-        let start_slot = start_epoch.start_slot(T::slots_per_epoch()) + 1;
+    pub fn new(start_slot: Slot, num_of_epochs: u64) -> Self {
         let end_slot = start_slot + num_of_epochs * T::slots_per_epoch();
         BatchInfo {
             start_slot,
