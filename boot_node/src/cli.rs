@@ -1,6 +1,6 @@
 //! Simple logic for spawning a Lighthouse BootNode.
 
-use clap::{App, Arg};
+use clap::{App, Arg, ArgGroup};
 
 // TODO: Add DOS prevention CLI params
 pub fn cli_app<'a, 'b>() -> App<'a, 'b> {
@@ -13,13 +13,25 @@ pub fn cli_app<'a, 'b>() -> App<'a, 'b> {
         .settings(&[clap::AppSettings::ColoredHelp])
         .arg(
             Arg::with_name("enr-address")
-                .value_name("IP-ADDRESS")
-                .help("The external IP address/ DNS address to broadcast to other peers on how to reach this node. \
-                If a DNS address is provided, the enr-address is set to the IP address it resolves to and \
-                does not auto-update based on PONG responses in discovery.")
+            .value_name("IPV4-ADDRESS")
+            .help("The external IP4 address/ DNS address to broadcast to other peers on how to reach this node. \
+                  If a DNS address is provided, the enr 'ip' field is set to the IP4 address it resolves to and \
+                  does not auto-update based on PONG responses in discovery.")
+        )
+        .arg(
+            Arg::with_name("enr-ipv6-address")
+            .value_name("IPV6-ADDRESS")
+            .help("The external IP6 address/ DNS address to broadcast to other peers on how to reach this node. \
+                  If a DNS address is provided, the 'ip6' field is set to the IP6 address it resolves to and \
+                  does not auto-update based on PONG responses in discovery.")
+        )
+        .group(
+            ArgGroup::with_name("advertised-addresses")
                 .required(true)
-                .takes_value(true)
                 .conflicts_with("network-dir")
+                .multiple(true)
+                .arg("enr-address")
+                .arg("enr-ipv6-address")
         )
         .arg(
             Arg::with_name("port")
@@ -49,7 +61,11 @@ pub fn cli_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("enr-udp-port")
                 .long("enr-port")
                 .value_name("PORT")
-                .help("The UDP port of the boot node's ENR. This is the port that external peers will dial to reach this boot node. Set this only if the external port differs from the listening port.")
+                .help("The UDP port of the boot node's ENR. This is the port that external peers \
+                      will dial to reach this boot node. Set this only if the external port \
+                      differs from the listening port. If set, the 'udp' and 'udp6' ENR fields \
+                      will be set depending on whether the respective 'enr-address' and/or \
+                      'enr-ipv6-address' flags are given.")
                 .takes_value(true)
                 .conflicts_with("network-dir")
         )
