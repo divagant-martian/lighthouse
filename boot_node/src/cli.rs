@@ -2,8 +2,9 @@
 
 use clap::{App, Arg, ArgGroup};
 
-const IPV4_ADDR_ARG: &str = "advertised-ipv4-address";
-const IPV6_ADDR_ARG: &str = "advertised-ipv6-address";
+pub(crate) const IPV4_ADDR_ARG: &str = "advertised-ipv4-address";
+pub(crate) const IPV6_ADDR_ARG: &str = "advertised-ipv6-address";
+pub(crate) const ADVERTISED_PORT: &str = "advertised-port";
 
 // TODO: Add DOS prevention CLI params
 pub fn cli_app<'a, 'b>() -> App<'a, 'b> {
@@ -65,8 +66,8 @@ pub fn cli_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("enr-udp-port")
-                .long("enr-port")
+            Arg::with_name(ADVERTISED_PORT)
+                .long(ADVERTISED_PORT)
                 .value_name("PORT")
                 .help("The UDP port of the boot node's ENR. This is the port that external peers \
                       will dial to reach this boot node. Set this only if the external port \

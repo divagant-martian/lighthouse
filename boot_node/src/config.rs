@@ -10,7 +10,7 @@ use lighthouse_network::{
 };
 use serde_derive::{Deserialize, Serialize};
 use ssz::Encode;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::{marker::PhantomData, path::PathBuf};
 use types::EthSpec;
 
@@ -58,16 +58,59 @@ impl<T: EthSpec> BootNodeConfig<T> {
         let logger = slog_scope::logger();
 
         set_network_config(&mut network_config, matches, &data_dir, &logger, true)?;
-
         // Set the enr-udp-port to the default listening port if it was not specified.
         if !matches.is_present("enr-udp-port") {
             network_config.enr_udp_port = Some(network_config.discovery_port);
         }
 
-        // By default this is enabled. If it is not set, revert to false.
-        if !matches.is_present("enable-enr-auto-update") {
-            network_config.discv5_config.enr_update = false;
-        }
+        network_config.discv5_config.enr_update = matches.is_present("enable-enr-auto-update");
+
+        let advertised_port = matches
+            .value_of(crate::cli::ADVERTISED_PORT)
+            .map(|port| port.parse::<u16>())
+            .transpose()
+            .map_err(|e| format!("Failed to parse advertised port {e}"))?
+            .unwrap_or(network_config.discovery_port);
+
+        let advertised_ipv4_addr = matches
+            .value_of(crate::cli::IPV4_ADDR_ARG)
+            .map(|addr| {
+                addr.parse::<std::net::Ipv4Addr>().or_else(|addr| {
+                    let addr_name = format!("{addr}:{advertised_port}");
+                    addr_name
+                        .to_socket_addrs()
+                        .map_err(|e| e.to_string())?
+                        .find_map(|addr| match addr.ip() {
+                            std::net::IpAddr::V4(ip4) => Some(ip4),
+                            std::net::IpAddr::V6(_) => None,
+                        })
+                        .ok_or(format!(
+                            "Failed to parse or resolve {}:{addr} as an IpV4 address",
+                            crate::cli::IPV4_ADDR_ARG
+                        ))
+                })
+            })
+            .transpose()?;
+
+        let advertised_ipv6_addr = matches
+            .value_of(crate::cli::IPV6_ADDR_ARG)
+            .map(|addr| {
+                addr.parse::<std::net::Ipv6Addr>().or_else(|addr| {
+                    let addr_name = format!("{addr}:{advertised_port}");
+                    addr_name
+                        .to_socket_addrs()
+                        .map_err(|e| e.to_string())?
+                        .find_map(|addr| match addr.ip() {
+                            std::net::IpAddr::V6(ip6) => Some(ip6),
+                            std::net::IpAddr::V4(_) => None,
+                        })
+                        .ok_or(format!(
+                            "Failed to parse or resolve {}:{addr} as an IpV6 address",
+                            crate::cli::IPV6_ADDR_ARG
+                        ))
+                })
+            })
+            .transpose()?;
 
         // the address to listen on
         let listen_socket =
@@ -116,28 +159,13 @@ impl<T: EthSpec> BootNodeConfig<T> {
 
             let mut local_enr = {
                 let mut builder = EnrBuilder::new("v4");
-                // Set the enr address if specified. Set also the port.
-                // NOTE: if the port is specified but the the address is not, the port won't be
-                // set since it can't be known if it's an ipv6 or ipv4 udp port.
-                if let Some(enr_address) = network_config.enr_address {
-                    match enr_address {
-                        std::net::IpAddr::V4(ipv4_addr) => {
-                            builder.ip4(ipv4_addr);
-                            if let Some(port) = network_config.enr_udp_port {
-                                builder.udp4(port);
-                            }
-                        }
-                        std::net::IpAddr::V6(ipv6_addr) => {
-                            builder.ip6(ipv6_addr);
-                            if let Some(port) = network_config.enr_udp_port {
-                                builder.udp6(port);
-                                // We are enabling mapped addresses in the boot node in this case,
-                                // so advertise an udp4 port as well.
-                                builder.udp4(port);
-                            }
-                        }
-                    }
-                };
+                if let Some(ipv6_addr) = advertised_ipv6_addr {
+                    builder.ip6(ipv6_addr).udp6(advertised_port);
+                }
+
+                if let Some(ipv4_addr) = advertised_ipv4_addr {
+                    builder.ip4(ipv4_addr).udp4(advertised_port);
+                }
 
                 // If we know of the ENR field, add it to the initial construction
                 if let Some(enr_fork_bytes) = enr_fork {
