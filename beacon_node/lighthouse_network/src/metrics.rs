@@ -61,6 +61,11 @@ lazy_static! {
         "The connected peers via client implementation",
         &["Client"]
     );
+    pub static ref MAX_SEND_QUEUE_SIZE_PER_CLIENT: Result<IntGaugeVec> = try_create_int_gauge_vec(
+        "libp2p_max_send_queue_size_per_client",
+        "max(ln2(send_queue.len())) across peers of a client",
+        &["client"]
+    );
     pub static ref FAILED_ATTESTATION_PUBLISHES_PER_SUBNET: Result<IntGaugeVec> =
         try_create_int_gauge_vec(
             "gossipsub_failed_attestation_publishes_per_subnet",

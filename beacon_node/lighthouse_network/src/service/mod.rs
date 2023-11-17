@@ -1228,6 +1228,21 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                     "does_not_support_gossipsub",
                 );
             }
+            gossipsub::Event::SendQueueSizeUpdate { peer_id, pow } => {
+                let client = self.network_globals.client(&peer_id);
+                debug!(self.log, "send_queue size updated"; "peer_id" => %peer_id, "pow" => %pow, "client" => %client);
+
+                if let Some(v) = metrics::get_int_gauge(
+                    &metrics::MAX_SEND_QUEUE_SIZE_PER_CLIENT,
+                    &[client.kind.as_ref()],
+                ) {
+                    let val = v.get();
+                    let new_val = pow as i64;
+                    if new_val > val {
+                        v.set(new_val)
+                    }
+                };
+            }
         }
         None
     }
